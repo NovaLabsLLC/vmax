@@ -1,16 +1,28 @@
 import React, { useEffect, useState } from "react";
 import HomePanel from "./panels/HomePanel";
+import WorkspacePanel from "./panels/WorkspacePanel";
+import ChatsPanel from "./panels/ChatsPanel";
 import ProfilePanel from "./panels/ProfilePanel";
 import SettingsPanel from "./panels/SettingsPanel";
 import HelpPanel from "./panels/HelpPanel";
 import Onboarding from "./onboarding/Onboarding";
+import { useScreen } from "./hooks/useScreen";
 
-type View = "home" | "profile" | "settings" | "help";
+type View = "home" | "workspace" | "chats" | "profile" | "settings" | "help";
 
 export default function CommandCenter() {
   const [view, setView] = useState<View>("home");
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
   const [profileName, setProfileName] = useState<string>("");
+  // Voice question dispatched from the floating pill. Lifted up here so it's
+  // captured even when the user is on a different tab (Workspace might be
+  // unmounted otherwise).
+  const [pendingVoiceQuestion, setPendingVoiceQuestion] = useState<string | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+
+  // Screen capture lives here so the pill's toggle works no matter which tab
+  // is open. The latest frame is passed down to the workspace.
+  const screenCap = useScreen();
 
   useEffect(() => {
     (async () => {
@@ -19,6 +31,28 @@ export default function CommandCenter() {
       if (p?.name) setProfileName(p.name);
     })();
   }, []);
+
+  useEffect(() => {
+    const off = window.exec.onPillVoiceQuestion((text) => {
+      setView("workspace");
+      setPendingVoiceQuestion(text);
+    });
+    return () => off();
+  }, []);
+
+  useEffect(() => {
+    const off = window.exec.onPillToggleScreen(() => {
+      if (screenCap.status === "granted") screenCap.stop();
+      else screenCap.start();
+    });
+    return () => off();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screenCap.status]);
+
+  // Mirror screen state to the pill so its icon reflects reality.
+  useEffect(() => {
+    window.exec.workspaceStatus({ screen: screenCap.status === "granted" });
+  }, [screenCap.status]);
 
   if (onboarded === null) return null;
   if (!onboarded) {
@@ -44,6 +78,25 @@ export default function CommandCenter() {
         <div className="drag h-11 shrink-0 border-b border-white/[0.05]" />
         <div className="flex-1 overflow-y-auto">
           {view === "home" && <HomePanel profileName={profileName} onGoSettings={() => setView("settings")} />}
+          {view === "workspace" && (
+            <WorkspacePanel
+              pendingVoiceQuestion={pendingVoiceQuestion}
+              onConsumeVoiceQuestion={() => setPendingVoiceQuestion(null)}
+              getScreenshot={() => screenCap.getLatestFrame()}
+              screenStatus={screenCap.status}
+              onStartScreen={() => screenCap.start()}
+              onStopScreen={() => screenCap.stop()}
+              activeSessionId={activeSessionId}
+              onSessionChange={setActiveSessionId}
+            />
+          )}
+          {view === "chats" && (
+            <ChatsPanel
+              activeId={activeSessionId}
+              onOpen={(id) => { setActiveSessionId(id); setView("workspace"); }}
+              onNew={(id) => { setActiveSessionId(id); setView("workspace"); }}
+            />
+          )}
           {view === "profile" && <ProfilePanel onSaved={(p) => setProfileName(p.name || "")} />}
           {view === "settings" && <SettingsPanel />}
           {view === "help" && <HelpPanel />}
@@ -71,6 +124,8 @@ function Sidebar({
 
       <nav className="px-2 py-2 space-y-0.5">
         <NavItem icon={<HomeIcon />} label="Home" active={view === "home"} onClick={() => onView("home")} />
+        <NavItem icon={<TerminalIcon />} label="Workspace" active={view === "workspace"} onClick={() => onView("workspace")} />
+        <NavItem icon={<ChatIcon />} label="Chats" active={view === "chats"} onClick={() => onView("chats")} />
         <NavItem icon={<UserIcon />} label="Profile" active={view === "profile"} onClick={() => onView("profile")} />
         <NavItem icon={<GearIcon />} label="Settings" active={view === "settings"} onClick={() => onView("settings")} />
         <NavItem icon={<HelpIcon />} label="Help" active={view === "help"} onClick={() => onView("help")} />
@@ -128,6 +183,12 @@ function UserIcon() {
 }
 function GearIcon() {
   return <svg width="14" height="14" viewBox="0 0 24 24" {...stroke}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>;
+}
+function TerminalIcon() {
+  return <svg width="14" height="14" viewBox="0 0 24 24" {...stroke}><polyline points="4 8 8 12 4 16" /><line x1="11" y1="16" x2="20" y2="16" /></svg>;
+}
+function ChatIcon() {
+  return <svg width="14" height="14" viewBox="0 0 24 24" {...stroke}><path d="M21 12a8 8 0 0 1-12.5 6.6L3 20l1.4-5.5A8 8 0 1 1 21 12z" /></svg>;
 }
 function HelpIcon() {
   return <svg width="14" height="14" viewBox="0 0 24 24" {...stroke}><circle cx="12" cy="12" r="9" /><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 3.5" /><circle cx="12" cy="17" r="0.6" fill="currentColor" /></svg>;

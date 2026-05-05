@@ -6,7 +6,11 @@
 const OPENAI_KEY = process.env.OPENAI_API_KEY || "";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || "";
 
+const { AGENT_PROMPT_SAFETY_PARAGRAPH } = require("./commandSafety.js");
+
 const PLAN_SYSTEM = `You are Exec — a senior engineer assistant that turns a task + repo state into a tactical implementation plan for a coding agent (Cursor / Claude Code).
+
+${AGENT_PROMPT_SAFETY_PARAGRAPH}
 
 Respond ONLY in compact JSON matching this shape:
 {
@@ -20,6 +24,8 @@ Be concrete. Reference actual files from the changed-files list when relevant. N
 
 const FAILURE_SYSTEM = `You are Exec. A command just failed in the user's repo. Diagnose like a senior engineer who has already read their codebase.
 
+${AGENT_PROMPT_SAFETY_PARAGRAPH}
+
 Respond ONLY in compact JSON:
 {
   "what": string,                  // one-sentence: what happened, in human terms
@@ -32,6 +38,10 @@ Be specific. If the user's task and repo state suggest the cause, name it. No pr
 
 const DIFF_SYSTEM = `You are Exec. Summarize this git diff like a senior reviewer.
 
+${AGENT_PROMPT_SAFETY_PARAGRAPH}
+
+In "nextChecks" suggest only safe, read-only verification commands (tests, typecheck, lint) — never production deploys or destructive git.
+
 Respond ONLY in compact JSON:
 {
   "summary": string,             // 1-2 sentences: what changed and why it likely matters
@@ -41,14 +51,14 @@ Respond ONLY in compact JSON:
 }
 No prose outside the JSON.`;
 
-async function planTask({ task, repo, diff }) {
+async function planTask({ task, repo, diff, screenshotBase64 }) {
   const user = renderRepoContext({ task, repo, diff, includeDiff: true });
-  return callJSON({ system: PLAN_SYSTEM, user });
+  return callJSON({ system: PLAN_SYSTEM, user, screenshotBase64 });
 }
 
-async function explainFailure({ task, repo, command, output }) {
+async function explainFailure({ task, repo, command, output, screenshotBase64 }) {
   const user = `${renderRepoContext({ task, repo })}\n\nCommand: ${command}\n\n--- Output (last 8000 chars) ---\n${(output || "").slice(-8000)}`;
-  return callJSON({ system: FAILURE_SYSTEM, user });
+  return callJSON({ system: FAILURE_SYSTEM, user, screenshotBase64 });
 }
 
 async function summarizeDiff({ diff, fallback }) {
@@ -79,15 +89,21 @@ function renderRepoContext({ task, repo, diff, includeDiff }) {
   return lines.join("\n");
 }
 
-async function callJSON({ system, user }) {
+async function callJSON({ system, user, screenshotBase64 }) {
   const raw = ANTHROPIC_KEY && !OPENAI_KEY
-    ? await callClaude({ system, user })
-    : await callOpenAI({ system, user });
+    ? await callClaude({ system, user, screenshotBase64 })
+    : await callOpenAI({ system, user, screenshotBase64 });
   return parseJSON(raw);
 }
 
-async function callOpenAI({ system, user }) {
+async function callOpenAI({ system, user, screenshotBase64 }) {
   if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY missing");
+  const userContent = screenshotBase64
+    ? [
+        { type: "text", text: user + "\n\n(A screenshot of the user's screen is attached for additional context. Reference visible UI elements when relevant.)" },
+        { type: "image_url", image_url: { url: `data:image/jpeg;base64,${screenshotBase64}`, detail: "low" } },
+      ]
+    : user;
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
@@ -95,7 +111,7 @@ async function callOpenAI({ system, user }) {
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: system },
-        { role: "user", content: user },
+        { role: "user", content: userContent },
       ],
       response_format: { type: "json_object" },
       temperature: 0.2,
@@ -107,8 +123,19 @@ async function callOpenAI({ system, user }) {
   return json.choices?.[0]?.message?.content || "";
 }
 
-async function callClaude({ system, user }) {
+async function callClaude({ system, user, screenshotBase64 }) {
   if (!ANTHROPIC_KEY) throw new Error("ANTHROPIC_API_KEY missing");
+  const content = [];
+  if (screenshotBase64) {
+    content.push({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: screenshotBase64 },
+    });
+  }
+  content.push({
+    type: "text",
+    text: (screenshotBase64 ? user + "\n\n(Screenshot of the user's screen attached. Reference visible UI elements when relevant.)\n\nReturn ONLY valid JSON." : user + "\n\nReturn ONLY valid JSON."),
+  });
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -120,7 +147,7 @@ async function callClaude({ system, user }) {
       model: "claude-sonnet-4-6",
       max_tokens: 1500,
       system,
-      messages: [{ role: "user", content: user + "\n\nReturn ONLY valid JSON." }],
+      messages: [{ role: "user", content }],
     }),
   });
   if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
@@ -144,4 +171,41 @@ function parseJSON(raw) {
   }
 }
 
-module.exports = { planTask, explainFailure, summarizeDiff };
+// ---- Voice ----
+
+async function transcribeAudio({ audioBase64, mimeType }) {
+  if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY missing (required for Whisper)");
+  const buf = Buffer.from(audioBase64, "base64");
+  const ext = mimeType && mimeType.includes("wav") ? "wav" : "webm";
+  const blob = new Blob([buf], { type: mimeType || "audio/webm" });
+  const form = new FormData();
+  form.append("file", blob, `audio.${ext}`);
+  form.append("model", "whisper-1");
+  const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${OPENAI_KEY}` },
+    body: form,
+  });
+  if (!res.ok) throw new Error(`Whisper failed: ${res.status} ${await res.text()}`);
+  const json = await res.json();
+  return { text: json.text || "" };
+}
+
+async function synthesizeSpeech({ text, voice = "nova" }) {
+  if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY missing (required for TTS)");
+  const res = await fetch("https://api.openai.com/v1/audio/speech", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "gpt-4o-mini-tts",
+      voice,
+      input: (text || "").slice(0, 4000),
+      format: "mp3",
+    }),
+  });
+  if (!res.ok) throw new Error(`TTS failed: ${res.status} ${await res.text()}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { audioBase64: buf.toString("base64"), mimeType: "audio/mpeg" };
+}
+
+module.exports = { planTask, explainFailure, summarizeDiff, transcribeAudio, synthesizeSpeech };

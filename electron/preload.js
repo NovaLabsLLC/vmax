@@ -5,6 +5,54 @@ contextBridge.exposeInMainWorld("exec", {
   openOverlay: () => ipcRenderer.invoke("exec:open-overlay"),
   closeOverlay: () => ipcRenderer.invoke("exec:close-overlay"),
   focusCommandCenter: () => ipcRenderer.invoke("exec:focus-command-center"),
+
+  // pill → workspace bus
+  pillTranscript: (text) => ipcRenderer.invoke("pill:transcript", text),
+  pillVoiceQuestion: (text) => ipcRenderer.invoke("pill:voice-question", text),
+  pillRequestCursor: () => ipcRenderer.invoke("pill:request-cursor"),
+  pillToggleScreen: () => ipcRenderer.invoke("pill:toggle-screen"),
+  workspaceStatus: (status) => ipcRenderer.invoke("workspace:status", status),
+  onPillTranscript: (cb) => {
+    const h = (_e, text) => cb(text);
+    ipcRenderer.on("pill:transcript", h);
+    return () => ipcRenderer.removeListener("pill:transcript", h);
+  },
+  onPillVoiceQuestion: (cb) => {
+    const h = (_e, text) => cb(text);
+    ipcRenderer.on("pill:voice-question", h);
+    return () => ipcRenderer.removeListener("pill:voice-question", h);
+  },
+  onPillRequestCursor: (cb) => {
+    const h = () => cb();
+    ipcRenderer.on("pill:request-cursor", h);
+    return () => ipcRenderer.removeListener("pill:request-cursor", h);
+  },
+  onPillToggleScreen: (cb) => {
+    const h = () => cb();
+    ipcRenderer.on("pill:toggle-screen", h);
+    return () => ipcRenderer.removeListener("pill:toggle-screen", h);
+  },
+  onWorkspaceStatus: (cb) => {
+    const h = (_e, status) => cb(status);
+    ipcRenderer.on("workspace:status", h);
+    return () => ipcRenderer.removeListener("workspace:status", h);
+  },
+  setOverlayCaptionOpen: (open) => ipcRenderer.invoke("overlay:set-caption-open", !!open),
+  /** Same as setOverlayCaptionOpen but synchronous — required so the window resizes before the first paint. */
+  setOverlayCaptionOpenSync: (open) => {
+    ipcRenderer.sendSync("overlay:set-caption-open-sync", !!open);
+  },
+  publishVoiceCaption: (payload) => ipcRenderer.invoke("voice:publish-caption", payload || {}),
+  onVoiceCaption: (cb) => {
+    const h = (_e, p) => cb(p || {});
+    ipcRenderer.on("voice:caption", h);
+    return () => ipcRenderer.removeListener("voice:caption", h);
+  },
+  onCaptionDirection: (cb) => {
+    const h = (_e, dir) => cb(dir);
+    ipcRenderer.on("overlay:caption-direction", h);
+    return () => ipcRenderer.removeListener("overlay:caption-direction", h);
+  },
   getRecentRepos: () => ipcRenderer.invoke("exec:get-recent-repos"),
   getLastRepo: () => ipcRenderer.invoke("exec:get-last-repo"),
 
@@ -12,6 +60,12 @@ contextBridge.exposeInMainWorld("exec", {
   saveProfile: (p) => ipcRenderer.invoke("exec:save-profile", p),
   getSettings: () => ipcRenderer.invoke("exec:get-settings"),
   saveSettings: (s) => ipcRenderer.invoke("exec:save-settings", s),
+  listSessions: () => ipcRenderer.invoke("sessions:list"),
+  getSession: (id) => ipcRenderer.invoke("sessions:get", id),
+  saveSession: (s) => ipcRenderer.invoke("sessions:save", s),
+  deleteSession: (id) => ipcRenderer.invoke("sessions:delete", id),
+  newSession: (seed) => ipcRenderer.invoke("sessions:new", seed || {}),
+
   isOnboarded: () => ipcRenderer.invoke("exec:is-onboarded"),
   finishOnboarding: () => ipcRenderer.invoke("exec:onboarding-done"),
   rememberRepo: (p) => ipcRenderer.invoke("exec:remember-repo", p),
@@ -22,6 +76,8 @@ contextBridge.exposeInMainWorld("exec", {
   sendToCursorChat: (payload) => ipcRenderer.invoke("exec:send-to-cursor-chat", payload),
 
   run: (payload) => ipcRenderer.invoke("exec:run", payload),
+  openclawAgent: (payload) => ipcRenderer.invoke("exec:openclaw-agent", payload),
+  runClaudeCli: (payload) => ipcRenderer.invoke("exec:run-claude-cli", payload),
   cancelRun: (runId) => ipcRenderer.invoke("exec:run:cancel", runId),
   onRunData: (cb) => {
     const handler = (_evt, payload) => cb(payload);
@@ -34,6 +90,8 @@ contextBridge.exposeInMainWorld("exec", {
     return () => ipcRenderer.removeListener("exec:run:end", handler);
   },
 
+  transcribe: (payload) => ipcRenderer.invoke("ai:transcribe", payload),
+  tts: (payload) => ipcRenderer.invoke("ai:tts", payload),
   plan: (payload) => ipcRenderer.invoke("ai:plan", payload),
   explainFailure: (payload) => ipcRenderer.invoke("ai:explain-failure", payload),
   summarizeDiff: (payload) => ipcRenderer.invoke("ai:summarize-diff", payload),

@@ -9,19 +9,22 @@ type Props = {
   loading?: boolean;
   onCopyCursorPrompt?: (prompt: string) => void;
   onSendToCursor?: (prompt: string) => void;
+  onSendToClaudeCli?: (prompt: string) => void;
   onRunCommand?: (cmd: string) => void;
+  onOpenClaw?: () => void;
+  openClawDisabled?: boolean;
 };
 
 export default function ResultPanel(props: Props) {
   const { kind, loading } = props;
-  if (loading) return <Wrapper><Loading /></Wrapper>;
+  if (loading) return <Wrapper><Loading kind={kind} /></Wrapper>;
   if (kind === "idle") return <Wrapper><Idle /></Wrapper>;
   if (kind === "plan" && props.plan)
     return <Wrapper><PlanView {...props} plan={props.plan} /></Wrapper>;
   if (kind === "failure" && props.failure)
     return <Wrapper><FailureView {...props} failure={props.failure} /></Wrapper>;
   if (kind === "diff" && props.diff)
-    return <Wrapper><DiffView diff={props.diff} /></Wrapper>;
+    return <Wrapper><DiffView {...props} diff={props.diff} /></Wrapper>;
   return <Wrapper><Idle /></Wrapper>;
 }
 
@@ -41,11 +44,35 @@ function Idle() {
   );
 }
 
-function Loading() {
+function Loading({ kind }: { kind: Props["kind"] }) {
+  const label =
+    kind === "plan" ? "Planning…"
+    : kind === "failure" ? "Diagnosing…"
+    : kind === "diff" ? "Summarizing diff…"
+    : "Working…";
+
   return (
-    <div className="flex items-center gap-2 text-[12.5px] text-white/55">
-      <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-      Thinking…
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 text-[12.5px] text-white/55">
+        <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+        <span>{label}</span>
+      </div>
+      <p className="text-[11px] text-white/40 leading-snug">
+        You can keep using the UI — results show up when ready.
+      </p>
+      <div className="space-y-2.5">
+        <div className="h-2.5 rounded-md bg-white/[0.08] skel w-[92%]" />
+        <div className="h-2.5 rounded-md bg-white/[0.08] skel w-[78%]" />
+        <div className="h-2.5 rounded-md bg-white/[0.08] skel w-[85%]" />
+        {kind === "plan" && (
+          <>
+            <div className="h-16 rounded-lg bg-white/[0.06] skel w-full mt-3" />
+            <div className="h-2.5 rounded-md bg-white/[0.08] skel w-[64%]" />
+          </>
+        )}
+        {kind === "failure" && <div className="h-20 rounded-lg bg-white/[0.06] skel w-full mt-1" />}
+        {kind === "diff" && <div className="h-14 rounded-lg bg-white/[0.06] skel w-full mt-1" />}
+      </div>
     </div>
   );
 }
@@ -55,6 +82,8 @@ function PlanView({
   onCopyCursorPrompt,
   onSendToCursor,
   onRunCommand,
+  onOpenClaw,
+  openClawDisabled,
 }: { plan: Plan } & Props) {
   return (
     <div className="space-y-3">
@@ -104,8 +133,11 @@ function PlanView({
           prompt={plan.cursorPrompt}
           onCopy={onCopyCursorPrompt}
           onSend={onSendToCursor}
+          onSendClaude={onSendToClaudeCli}
         />
       )}
+
+      <OpenClawRow onRun={onOpenClaw} disabled={openClawDisabled} />
     </div>
   );
 }
@@ -114,6 +146,9 @@ function FailureView({
   failure,
   onCopyCursorPrompt,
   onSendToCursor,
+  onSendToClaudeCli,
+  onOpenClaw,
+  openClawDisabled,
 }: { failure: FailureExplanation } & Props) {
   return (
     <div className="space-y-3">
@@ -140,13 +175,20 @@ function FailureView({
           prompt={failure.cursorPrompt}
           onCopy={onCopyCursorPrompt}
           onSend={onSendToCursor}
+          onSendClaude={onSendToClaudeCli}
         />
       )}
+
+      <OpenClawRow onRun={onOpenClaw} disabled={openClawDisabled} />
     </div>
   );
 }
 
-function DiffView({ diff }: { diff: DiffSummary }) {
+function DiffView({
+  diff,
+  onOpenClaw,
+  openClawDisabled,
+}: { diff: DiffSummary } & Props) {
   return (
     <div className="space-y-3">
       <Section label="Summary">
@@ -178,6 +220,37 @@ function DiffView({ diff }: { diff: DiffSummary }) {
           </ul>
         </Section>
       )}
+
+      <OpenClawRow onRun={onOpenClaw} disabled={openClawDisabled} />
+    </div>
+  );
+}
+
+function OpenClawRow({ onRun, disabled }: { onRun?: () => void; disabled?: boolean }) {
+  if (!onRun) return null;
+  return (
+    <div className="rounded-xl border border-violet-400/25 bg-violet-500/[0.07] p-3 relative overflow-hidden">
+      <span className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-violet-400/25 to-transparent" />
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between">
+        <div className="min-w-0">
+          <div className="text-[9.5px] uppercase tracking-[0.14em] text-violet-200/55 mb-0.5">OpenClaw</div>
+          <div className="text-[12px] text-white/80 leading-snug">
+            Route this result to your local <span className="text-violet-200/95 font-medium">openclaw agent</span> for gated execution.
+            Output streams in the terminal; you approve tool/exec steps in OpenClaw.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onRun}
+          disabled={disabled}
+          className={`shrink-0 text-[12px] px-3.5 py-2 rounded-lg font-medium tracking-tight transition-all
+            ${disabled
+              ? "bg-white/5 text-white/35 cursor-not-allowed border border-white/10"
+              : "bg-violet-500/90 text-white hover:bg-violet-500 border border-violet-400/40 shadow-[0_0_18px_-6px_rgba(167,139,250,0.9)]"}`}
+        >
+          Run in OpenClaw
+        </button>
+      </div>
     </div>
   );
 }
@@ -195,10 +268,12 @@ function CursorBlock({
   prompt,
   onCopy,
   onSend,
+  onSendClaude,
 }: {
   prompt: string;
   onCopy?: (prompt: string) => void;
   onSend?: (prompt: string) => void;
+  onSendClaude?: (prompt: string) => void;
 }) {
   const [copied, setCopied] = React.useState(false);
   return (
@@ -218,6 +293,17 @@ function CursorBlock({
                          border border-white/[0.08] hover:border-white/15 text-white/85 transition-all flex items-center gap-1"
             >
               {copied ? "✓ Copied" : "Copy"}
+            </button>
+          )}
+          {onSendClaude && (
+            <button
+              onClick={() => onSendClaude(prompt)}
+              title="Run with Claude Code CLI inside the repo"
+              className="text-[10.5px] px-2.5 h-[22px] rounded-md bg-amber-500/15 hover:bg-amber-500/25
+                         border border-amber-400/30 hover:border-amber-400/50 text-amber-100 transition-all
+                         flex items-center gap-1"
+            >
+              Send to Claude Code
             </button>
           )}
           {onSend && (

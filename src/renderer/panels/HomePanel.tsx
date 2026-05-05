@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { RepoContext } from "../types";
 
 type RepoCard = { path: string; ctx: RepoContext | null };
@@ -13,6 +13,7 @@ export default function HomePanel({
   const [recents, setRecents] = useState<RepoCard[]>([]);
   const [busy, setBusy] = useState(false);
   const [task, setTask] = useState("");
+  const openingOverlayRef = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -25,20 +26,30 @@ export default function HomePanel({
   const primary = recents[0];
 
   async function startExec(repoPath?: string) {
+    if (busy || openingOverlayRef.current) return;
+    openingOverlayRef.current = true;
     setBusy(true);
     try {
       if (repoPath) await window.exec.rememberRepo(repoPath);
       await window.exec.openOverlay();
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+      openingOverlayRef.current = false;
+    }
   }
   async function pickAndStart() {
+    if (busy || openingOverlayRef.current) return;
+    openingOverlayRef.current = true;
     setBusy(true);
     try {
       const p = await window.exec.pickRepo();
       if (!p) return;
       await window.exec.rememberRepo(p);
       await window.exec.openOverlay();
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+      openingOverlayRef.current = false;
+    }
   }
 
   return (

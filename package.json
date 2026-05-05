@@ -5,11 +5,11 @@
   "main": "electron/main.js",
   "scripts": {
     "dev:renderer": "vite",
-    "dev:electron": "wait-on http://localhost:5180 && cross-env NODE_ENV=development electron .",
+    "dev:electron": "wait-on http://localhost:5180 && cross-env NODE_ENV=development node scripts/run-electron.cjs",
     "dev": "concurrently -k -n RENDERER,ELECTRON -c blue,magenta \"npm:dev:renderer\" \"npm:dev:electron\"",
     "build:renderer": "vite build",
     "build": "npm run build:renderer",
-    "start": "cross-env NODE_ENV=production electron ."
+    "start": "cross-env NODE_ENV=production node scripts/run-electron.cjs"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

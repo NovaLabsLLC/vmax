@@ -29,17 +29,17 @@ export default function Launcher({
     <div
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      className="pointer-events-auto mx-auto mb-3 rounded-[20px]
-                 bg-gradient-to-b from-white/[0.06] to-transparent
+      className="pointer-events-auto mx-auto mb-3 rounded-[18px]
+                 bg-gradient-to-b from-white/[0.05] to-transparent
                  ring-1 ring-white/10
-                 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.85),0_0_0_1px_rgba(255,255,255,0.02)_inset]
+                 shadow-[0_22px_55px_-20px_rgba(0,0,0,0.9),0_0_0_1px_rgba(255,255,255,0.02)_inset]
                  backdrop-blur-2xl
-                 px-2.5 py-2 flex items-center gap-2
-                 w-[min(560px,92vw)]
+                 px-2.5 py-2.5 flex items-center gap-2
+                 w-[min(420px,88vw)]
                  relative overflow-hidden"
     >
       {/* underlying tinted fill (separate from gradient border) */}
-      <div className="absolute inset-0 -z-10 rounded-[20px] bg-[#08080a]/88" />
+      <div className="absolute inset-0 -z-10 rounded-[18px] bg-[#070709]/96" />
 
       {!active ? (
         <>

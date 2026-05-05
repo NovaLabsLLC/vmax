@@ -25,10 +25,21 @@ export default function Terminal({ lines, running, command, exitCode, onCancel, 
                     ring-1 ring-white/10
                     shadow-[0_18px_50px_-20px_rgba(0,0,0,0.8)]
                     flex flex-col h-[200px] overflow-hidden">
-      <div className="absolute inset-0 -z-10 bg-[#08080a]/92" />
+      <div className="absolute inset-0 -z-10 bg-[#070709]/97" />
       <div className="absolute inset-0 -z-10 bg-gradient-to-b from-white/[0.04] via-transparent to-transparent" />
       <span className="pointer-events-none absolute inset-x-3 top-0 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
-      <div className="h-8 px-3 flex items-center gap-2 border-b border-white/[0.06]">
+      <div className="relative h-8 px-3 flex items-center gap-2 border-b border-white/[0.06]">
+        {running && (
+          <div
+            className="absolute bottom-0 left-0 right-0 h-[2px] overflow-hidden pointer-events-none"
+            aria-hidden
+          >
+            <div
+              className="h-full w-[35%] bg-gradient-to-r from-transparent via-emerald-400/70 to-transparent"
+              style={{ animation: "shimmer-sweep 1.2s linear infinite" }}
+            />
+          </div>
+        )}
         <div className="text-[10px] uppercase tracking-[0.14em] text-white/45">Terminal</div>
         {command && (
           <div className="ml-2 mono text-[11px] text-white/55 truncate">$ {command}</div>

@@ -22,7 +22,7 @@ export default function CommandCards({ cards }: { cards: Card[] }) {
             ${c.enabled
               ? "bg-white/[0.04] border-white/[0.08] hover:bg-white/[0.07] hover:border-white/15 active:scale-[0.99]"
               : "bg-white/[0.02] border-white/[0.05] opacity-45 cursor-not-allowed"}
-            ${c.loading ? "ring-1 ring-emerald-400/40 border-emerald-400/30" : ""}`}
+            ${c.loading ? "ring-1 ring-emerald-400/40 border-emerald-400/30 shimmer-sweep" : ""}`}
         >
           {/* subtle top highlight */}
           <span className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
