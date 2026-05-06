@@ -32,7 +32,11 @@ function malformedStructuredResponse(hint) {
       "Vmax could not parse the model reply — it was missing fields or not valid JSON. Nothing was executed; you can try again.",
     what_vmax_sees: "",
     likely_problem: detail,
-    next_steps: ["Retry with a shorter task or question", "Confirm API keys in .env and network access"],
+    next_steps: [
+      `Error from model: ${detail}`,
+      "Retry with a shorter task or question",
+      "Confirm API keys in .env and network access",
+    ],
     cursor_prompt: "",
     claude_prompt: "",
     suggested_commands: [],

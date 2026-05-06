@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import type { VmaxPanelPayload } from "../types";
 
 export type VmaxExpandedPanelProps = {
@@ -9,6 +9,7 @@ export type VmaxExpandedPanelProps = {
   onCollapse: () => void;
   onCopyCursor: () => void;
   onSendClaude: () => void;
+  onSendCursor?: () => void;
   onOpenClaw: () => void;
   onRunSafeCommand: (command: string) => void;
 };
@@ -19,18 +20,31 @@ export default function VmaxExpandedPanel({
   parseWarning,
   actionsDisabled,
   onCollapse,
-  onCopyCursor,
-  onSendClaude,
-  onOpenClaw,
-  onRunSafeCommand,
+  onSendCursor,
 }: VmaxExpandedPanelProps) {
-  const safeCmd = panel.suggestedCommands?.[0]?.trim() || "";
-  const hasCursor = !!panel.cursorPrompt?.trim();
-  const hasClaude = !!panel.claudePrompt?.trim();
+  const hasPrompt = !!panel.cursorPrompt?.trim() || !!panel.claudePrompt?.trim();
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Auto-fit the overlay window height to actual content. The pill sits above
+  // this panel, so we publish (panel height + pill 64) as the desired window
+  // size; main clamps to safe bounds.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const push = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height) + 64; // + pill row
+      window.exec.setOverlayContentHeight?.(h);
+    };
+    push();
+    const ro = new ResizeObserver(push);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [panel?.nextSteps]);
 
   return (
     <div
-      className="no-drag flex flex-col h-full min-h-0 rounded-[16px] overflow-hidden
+      ref={rootRef}
+      className="no-drag flex flex-col rounded-[16px] overflow-hidden
                  border border-white/[0.12] bg-black/[0.22] backdrop-blur-xl
                  shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_24px_48px_-16px_rgba(0,0,0,0.65)]"
     >
@@ -62,161 +76,225 @@ export default function VmaxExpandedPanel({
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-3.5 py-3 space-y-3">
-        <Section title="Summary" accent="emerald">
-          <p className="text-[13px] text-white/[0.92] leading-relaxed">{panel.summary || "—"}</p>
-        </Section>
-
-        <Section title="What Vmax sees" accent="sky">
-          <p className="text-[12.5px] text-white/78 leading-relaxed whitespace-pre-wrap">
-            {panel.whatVmaxSees?.trim() || "—"}
-          </p>
-        </Section>
-
-        <Section title="Likely problem" accent="amber">
-          <p className="text-[12.5px] text-amber-100/85 leading-relaxed">
-            {panel.likelyProblem?.trim() || "—"}
-          </p>
-        </Section>
-
-        <Section title="Next steps" accent="violet">
-          {panel.nextSteps?.length ? (
-            <ol className="list-decimal list-inside space-y-1.5 text-[12.5px] text-white/80">
-              {panel.nextSteps.map((s, i) => (
-                <li key={i} className="leading-snug pl-0.5">{s}</li>
-              ))}
-            </ol>
-          ) : (
-            <p className="text-[12px] text-white/45">—</p>
-          )}
-        </Section>
-
-        <Section title="Cursor prompt" accent="white">
-          {hasCursor ? (
-            <pre className="mono text-[11.5px] text-white/88 whitespace-pre-wrap leading-relaxed p-2.5 rounded-xl
-                           bg-black/35 border border-white/[0.06] max-h-[120px] overflow-y-auto">
-              {panel.cursorPrompt}
-            </pre>
-          ) : (
-            <p className="text-[12px] text-white/45">—</p>
-          )}
-        </Section>
-
-        <Section title="Claude Code prompt" accent="amber">
-          {hasClaude ? (
-            <pre className="mono text-[11.5px] text-amber-50/90 whitespace-pre-wrap leading-relaxed p-2.5 rounded-xl
-                           bg-amber-950/25 border border-amber-400/15 max-h-[120px] overflow-y-auto">
-              {panel.claudePrompt}
-            </pre>
-          ) : (
-            <p className="text-[12px] text-white/45">—</p>
-          )}
-        </Section>
-
-        <Section title="Suggested commands" accent="cyan">
-          {panel.suggestedCommands?.length ? (
-            <ul className="space-y-1.5">
-              {panel.suggestedCommands.map((c, i) => (
-                <li key={i} className="mono text-[11.5px] text-cyan-100/85 flex items-center gap-2">
-                  <span className="text-cyan-400/80">▸</span>
-                  <span>{c}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-[12px] text-white/45">—</p>
-          )}
-        </Section>
-      </div>
-
-      <div className="shrink-0 p-3 pt-2 border-t border-white/[0.08] bg-black/[0.18]">
-        <div className="grid grid-cols-2 gap-2">
-          <ActionBtn
-            label="Copy Cursor prompt"
-            variant="secondary"
-            disabled={actionsDisabled || !hasCursor}
-            onClick={onCopyCursor}
-          />
-          <ActionBtn
-            label="Send to Claude Code"
-            variant="amber"
-            disabled={actionsDisabled || !hasClaude}
-            onClick={onSendClaude}
-          />
-          <ActionBtn
-            label="Execute with OpenClaw"
-            variant="violet"
+      <div className="px-3.5 py-3 space-y-3 max-h-[640px] overflow-y-auto">
+        {panel.nextSteps?.length ? (
+          <ol className="space-y-3 text-[13px] text-white/88 list-none pl-0">
+            {panel.nextSteps.map((s, i) => (
+              <Step key={i} index={i + 1} text={s} />
+            ))}
+          </ol>
+        ) : (
+          <p className="text-[12px] text-white/45">No steps yet.</p>
+        )}
+        {panel.cursorPrompt?.trim() ? (
+          <CursorPromptBlock text={panel.cursorPrompt.trim()} />
+        ) : null}
+        {hasPrompt && onSendCursor ? (
+          <button
+            type="button"
             disabled={actionsDisabled}
-            onClick={onOpenClaw}
-          />
-          <ActionBtn
-            label={safeCmd ? `Run: ${safeCmd}` : "Run safe command"}
-            variant="primary"
-            disabled={actionsDisabled || !safeCmd}
-            onClick={() => safeCmd && onRunSafeCommand(safeCmd)}
-          />
-        </div>
+            onClick={onSendCursor}
+            className="w-full h-9 rounded-xl text-[12px] font-semibold tracking-tight transition-all active:scale-[0.99]
+                       bg-violet-500/85 hover:bg-violet-500 text-white border border-violet-300/40
+                       shadow-[0_0_18px_-6px_rgba(167,139,250,0.7)]
+                       disabled:opacity-40 disabled:pointer-events-none
+                       flex items-center justify-center gap-2"
+            title="Open Cursor and paste this prompt into the agent"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M5 12h14M13 6l6 6-6 6" />
+            </svg>
+            Build it in Cursor
+          </button>
+        ) : null}
       </div>
     </div>
   );
 }
 
-function Section({
-  title,
-  accent,
-  children,
-}: {
-  title: string;
-  accent: "emerald" | "sky" | "amber" | "violet" | "white" | "cyan";
-  children: React.ReactNode;
-}) {
-  const dot =
-    accent === "emerald" ? "bg-emerald-400"
-    : accent === "sky" ? "bg-sky-400"
-    : accent === "amber" ? "bg-amber-400"
-    : accent === "violet" ? "bg-violet-400"
-    : accent === "cyan" ? "bg-cyan-400"
-    : "bg-white/60";
+// Parses a step string into prose + extracted commands (`...`) and code
+// fences (```...```). Renders inline-`code` as a copy chip and ``` blocks as a
+// dedicated copy box. Designed for non-coders: the chip / box is the action.
+type Token =
+  | { kind: "text"; value: string }
+  | { kind: "inline"; value: string }
+  | { kind: "block"; lang: string; value: string }
+  | { kind: "link"; label: string; href: string };
+
+function tokenize(text: string): Token[] {
+  const tokens: Token[] = [];
+  const fence = /```(\w+)?\n?([\s\S]*?)```/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = fence.exec(text)) !== null) {
+    if (m.index > last) tokens.push(...splitInline(text.slice(last, m.index)));
+    tokens.push({ kind: "block", lang: m[1] || "", value: m[2].trim() });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) tokens.push(...splitInline(text.slice(last)));
+  return tokens;
+}
+
+// Interleave inline-code and link parsing. We extract markdown links and bare
+// URLs first (they may contain characters that break code matching), then
+// scan remaining text for backtick spans.
+function splitInline(s: string): Token[] {
+  const out: Token[] = [];
+  // [label](https://…)  OR  bare https://…
+  const linkRe = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s)]+)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = linkRe.exec(s)) !== null) {
+    if (m.index > last) out.push(...splitCode(s.slice(last, m.index)));
+    if (m[1] && m[2]) {
+      out.push({ kind: "link", label: m[1], href: m[2] });
+    } else if (m[3]) {
+      out.push({ kind: "link", label: m[3], href: m[3] });
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < s.length) out.push(...splitCode(s.slice(last)));
+  return out;
+}
+
+function splitCode(s: string): Token[] {
+  const out: Token[] = [];
+  const re = /`([^`\n]+)`/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s)) !== null) {
+    if (m.index > last) out.push({ kind: "text", value: s.slice(last, m.index) });
+    out.push({ kind: "inline", value: m[1] });
+    last = m.index + m[0].length;
+  }
+  if (last < s.length) out.push({ kind: "text", value: s.slice(last) });
+  return out;
+}
+
+function Step({ index, text }: { index: number; text: string }) {
+  const tokens = tokenize(text);
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 py-2.5">
-      <div className="flex items-center gap-1.5 mb-1.5">
-        <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
-        <span className="text-[9.5px] uppercase tracking-[0.14em] text-white/40 font-medium">{title}</span>
+    <li className="flex gap-2.5 items-start">
+      <span className="shrink-0 mt-[1px] inline-flex w-5 h-5 items-center justify-center rounded-full
+                       bg-white/[0.08] border border-white/12 text-[10.5px] font-semibold text-white/80">
+        {index}
+      </span>
+      <div className="min-w-0 flex-1 leading-snug">
+        {tokens.map((t, i) =>
+          t.kind === "text" ? (
+            <span key={i}>{t.value}</span>
+          ) : t.kind === "inline" ? (
+            <CopyChip key={i} text={t.value} />
+          ) : t.kind === "link" ? (
+            <LinkChip key={i} label={t.label} href={t.href} />
+          ) : (
+            <CopyBlock key={i} text={t.value} lang={t.lang} />
+          )
+        )}
       </div>
-      {children}
-    </div>
+    </li>
   );
 }
 
-function ActionBtn({
-  label,
-  onClick,
-  disabled,
-  variant,
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  variant: "primary" | "secondary" | "amber" | "violet";
-}) {
-  const cls =
-    variant === "primary"
-      ? "bg-white text-black hover:bg-white/92 border border-white/20 shadow-[0_0_20px_-4px_rgba(255,255,255,0.35)]"
-    : variant === "amber"
-      ? "bg-amber-500/88 text-black hover:bg-amber-400 border border-amber-300/40"
-    : variant === "violet"
-      ? "bg-violet-500/85 text-white hover:bg-violet-500 border border-violet-400/35 shadow-[0_0_18px_-6px_rgba(167,139,250,0.7)]"
-      : "bg-white/[0.08] text-white/90 hover:bg-white/[0.13] border border-white/10";
+function CopyChip({ text }: { text: string }) {
+  const [copied, setCopied] = React.useState(false);
+  const onClick = () => {
+    void window.exec.copy(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1100);
+  };
   return (
     <button
       type="button"
-      disabled={disabled}
       onClick={onClick}
-      title={label}
-      className={`h-9 px-2 rounded-xl text-[10.5px] font-semibold tracking-tight transition-all active:scale-[0.98]
-        disabled:opacity-35 disabled:pointer-events-none ${cls}`}
+      title="Click to copy"
+      className={`mono align-baseline mx-0.5 px-1.5 py-[1px] rounded-md text-[12px] border transition-colors
+        ${copied
+          ? "bg-emerald-500/25 text-emerald-100 border-emerald-300/35"
+          : "bg-white/[0.07] text-white/95 border-white/14 hover:bg-white/[0.13]"}`}
     >
-      <span className="block w-full truncate">{label}</span>
+      {copied ? "copied" : text}
     </button>
+  );
+}
+
+function CursorPromptBlock({ text }: { text: string }) {
+  const [copied, setCopied] = React.useState(false);
+  const onClick = () => {
+    void window.exec.copy(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <div className="rounded-xl border border-violet-400/25 bg-violet-500/[0.07] overflow-hidden">
+      <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-violet-300/15">
+        <span className="text-[9.5px] uppercase tracking-[0.14em] text-violet-200/80 font-semibold">
+          Cursor prompt — paste to build it
+        </span>
+        <button
+          type="button"
+          onClick={onClick}
+          className={`text-[10.5px] px-2 py-0.5 rounded-md border transition-colors
+            ${copied
+              ? "bg-emerald-500/25 text-emerald-100 border-emerald-300/35"
+              : "bg-violet-500/15 text-violet-100 border-violet-300/30 hover:bg-violet-500/25"}`}
+        >
+          {copied ? "copied" : "copy"}
+        </button>
+      </div>
+      <pre className="text-[11.5px] text-violet-50/95 whitespace-pre-wrap leading-relaxed px-2.5 py-2">
+{text}
+      </pre>
+    </div>
+  );
+}
+
+function LinkChip({ label, href }: { label: string; href: string }) {
+  const onClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    void window.exec.openUrl?.(href);
+  };
+  return (
+    <a
+      href={href}
+      onClick={onClick}
+      title={href}
+      className="align-baseline mx-0.5 px-1.5 py-[1px] rounded-md text-[12px] border transition-colors
+                 bg-sky-500/15 text-sky-100 border-sky-300/30 hover:bg-sky-500/25 inline-flex items-center gap-1"
+    >
+      <span>{label}</span>
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+        <path d="M7 17L17 7M9 7h8v8" />
+      </svg>
+    </a>
+  );
+}
+
+function CopyBlock({ text, lang }: { text: string; lang: string }) {
+  const [copied, setCopied] = React.useState(false);
+  const onClick = () => {
+    void window.exec.copy(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1100);
+  };
+  return (
+    <div className="my-2 rounded-xl border border-white/12 bg-black/45 overflow-hidden">
+      <div className="flex items-center justify-between px-2.5 py-1 border-b border-white/[0.06]">
+        <span className="text-[9.5px] uppercase tracking-[0.14em] text-white/45">{lang || "code"}</span>
+        <button
+          type="button"
+          onClick={onClick}
+          className={`text-[10.5px] px-2 py-0.5 rounded-md border transition-colors
+            ${copied
+              ? "bg-emerald-500/25 text-emerald-100 border-emerald-300/35"
+              : "bg-white/[0.06] text-white/85 border-white/12 hover:bg-white/[0.12]"}`}
+        >
+          {copied ? "copied" : "copy"}
+        </button>
+      </div>
+      <pre className="mono text-[11.5px] text-white/90 whitespace-pre-wrap leading-relaxed px-2.5 py-2 max-h-[160px] overflow-auto">
+{text}
+      </pre>
+    </div>
   );
 }

@@ -147,6 +147,8 @@ declare global {
       publishVmaxResponse: (p: VmaxOverlayBroadcast) => Promise<boolean>;
       onVmaxResponse: (cb: (p: VmaxOverlayBroadcast) => void) => () => void;
       setOverlayExpanded: (expanded: boolean) => Promise<boolean>;
+      setOverlayContentHeight: (height: number) => Promise<boolean>;
+      openUrl: (url: string) => Promise<boolean>;
       vmaxPanelAction: (p: VmaxPanelAction) => Promise<boolean>;
       onVmaxPanelAction: (cb: (p: VmaxPanelAction) => void) => () => void;
 

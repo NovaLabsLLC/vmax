@@ -102,8 +102,11 @@ function createCommandWindow() {
 // ---- Overlay window ----
 const PILL_WIDTH = 600;
 const PILL_HEIGHT = 64;
-/** Total overlay content height when Vmax response panel is open (pill + body). */
-const OVERLAY_EXPANDED_HEIGHT = 540;
+/** Max overlay window height. Renderer measures actual content and asks for
+ *  the exact height it needs via `overlay:set-content-height`; this is just
+ *  the upper safety bound so a runaway response can't push the window off
+ *  screen. */
+const OVERLAY_EXPANDED_HEIGHT = 720;
 /** Extra height above the pill row when the caption / dialogue strip is open */
 const OVERLAY_CAPTION_ZONE = 100;
 
@@ -206,9 +209,27 @@ ipcMain.handle("voice:publish-caption", (_evt, payload) => {
 
 ipcMain.handle("overlay:set-expanded", (_evt, { expanded }) => {
   if (!overlayWindow || overlayWindow.isDestroyed()) return false;
-  const targetH = expanded ? OVERLAY_EXPANDED_HEIGHT : PILL_HEIGHT;
+  // On expand, pick a small starting height. The renderer's ResizeObserver
+  // will immediately push the exact required height via set-content-height,
+  // so we don't need to guess large here.
+  const targetH = expanded ? Math.min(180, OVERLAY_EXPANDED_HEIGHT) : PILL_HEIGHT;
   const [x, y] = overlayWindow.getPosition();
   const [, curH] = overlayWindow.getContentSize();
+  overlayWindow.setContentSize(PILL_WIDTH, targetH);
+  overlayWindow.setPosition(x, y + (curH - targetH));
+  return true;
+});
+
+// Renderer measures its actual content height and asks the overlay window to
+// match. Bottom edge stays anchored so the pill doesn't jump.
+ipcMain.handle("overlay:set-content-height", (_evt, { height }) => {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return false;
+  const minH = PILL_HEIGHT;
+  const maxH = OVERLAY_EXPANDED_HEIGHT;
+  const targetH = Math.max(minH, Math.min(maxH, Math.ceil(Number(height) || minH)));
+  const [x, y] = overlayWindow.getPosition();
+  const [, curH] = overlayWindow.getContentSize();
+  if (targetH === curH) return true;
   overlayWindow.setContentSize(PILL_WIDTH, targetH);
   overlayWindow.setPosition(x, y + (curH - targetH));
   return true;
@@ -367,6 +388,14 @@ ipcMain.handle("exec:open-in-cursor", async (_evt, repoPath) => {
 ipcMain.handle("exec:copy", (_evt, text) => {
   clipboard.writeText(String(text ?? ""));
   return true;
+});
+
+// Open an arbitrary http(s) URL in the user's default browser. Used by the
+// step renderer to make [label](url) markdown clickable.
+ipcMain.handle("exec:open-url", async (_evt, url) => {
+  const u = String(url || "").trim();
+  if (!/^https?:\/\//i.test(u)) return false;
+  try { await shell.openExternal(u); return true; } catch { return false; }
 });
 
 function sleep(ms) {

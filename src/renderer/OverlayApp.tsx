@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useVoiceCapture } from "./hooks/useVoiceCapture";
 import { subscribeSettingsUpdated } from "./utils/subscribeSettingsUpdated";
 import VmaxExpandedPanel from "./components/VmaxExpandedPanel";
@@ -22,6 +22,23 @@ export default function OverlayApp() {
 
   /** Window is tall enough to show the response surface */
   const [surfaceExpanded, setSurfaceExpanded] = useState(false);
+
+  // Wrapper around the response body. We measure its rendered height each phase
+  // change and push it to the main process so the overlay window hugs whatever
+  // content is currently visible — loading skeleton, error box, or full panel.
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el || !surfaceExpanded) return;
+    const push = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height) + 64; // + pill row
+      window.exec.setOverlayContentHeight?.(h);
+    };
+    push();
+    const ro = new ResizeObserver(push);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [surfaceExpanded, vmaxUi.phase, vmaxUi.panel]);
 
   useEffect(() => {
     const off = window.exec.onWorkspaceStatus((s) => setStatus((prev) => ({ ...prev, ...s })));
@@ -276,13 +293,13 @@ export default function OverlayApp() {
       </div>
 
       {showVmaxBody ? (
-        <div className="no-drag flex-1 min-h-0 flex flex-col px-2 pb-2 pt-0">
+        <div ref={bodyRef} className="no-drag flex flex-col px-2 pb-2 pt-0">
           {vmaxUi.phase === "loading" ? (
-            <div className="flex-1 min-h-[200px] rounded-[16px] border border-white/[0.1] bg-black/[0.2] p-4 space-y-3 animate-pulse">
-              <div className="h-3 rounded bg-white/[0.12] w-1/3" />
-              <div className="h-20 rounded-lg bg-white/[0.06]" />
-              <div className="h-14 rounded-lg bg-white/[0.06] w-4/5" />
-              <div className="h-14 rounded-lg bg-white/[0.06] w-3/5" />
+            <div className="rounded-[16px] border border-white/[0.1] bg-black/[0.2] p-3 space-y-2 animate-pulse">
+              <div className="h-3 rounded bg-white/[0.12] w-1/4" />
+              <div className="h-3 rounded bg-white/[0.06] w-3/4" />
+              <div className="h-3 rounded bg-white/[0.06] w-2/3" />
+              <div className="h-3 rounded bg-white/[0.06] w-1/2" />
             </div>
           ) : null}
 
@@ -300,6 +317,7 @@ export default function OverlayApp() {
               onCollapse={() => void collapseResponseSurface()}
               onCopyCursor={() => void window.exec.copy(vmaxUi.panel!.cursorPrompt || "")}
               onSendClaude={() => pushPanelAction({ type: "run-claude", prompt: vmaxUi.panel!.claudePrompt || vmaxUi.panel!.cursorPrompt })}
+              onSendCursor={() => pushPanelAction({ type: "send-cursor", prompt: vmaxUi.panel!.cursorPrompt || vmaxUi.panel!.claudePrompt || "" })}
               onOpenClaw={() =>
                 pushPanelAction({
                   type: "openclaw",

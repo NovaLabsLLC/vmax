@@ -67,6 +67,8 @@ contextBridge.exposeInMainWorld("exec", {
     return () => ipcRenderer.removeListener("vmax:response", h);
   },
   setOverlayExpanded: (expanded) => ipcRenderer.invoke("overlay:set-expanded", { expanded: !!expanded }),
+  setOverlayContentHeight: (height) => ipcRenderer.invoke("overlay:set-content-height", { height: Number(height) || 0 }),
+  openUrl: (url) => ipcRenderer.invoke("exec:open-url", url),
   vmaxPanelAction: (p) => ipcRenderer.invoke("exec:vmax-panel-action", p),
   onVmaxPanelAction: (cb) => {
     const h = (_e, p) => cb(p || {});
