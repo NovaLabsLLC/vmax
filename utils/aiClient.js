@@ -89,10 +89,27 @@ async function explainFailure({ task, repo, command, output, screenshotBase64 })
 const ASK_STRUCTURED_SYSTEM = `You are Exec — the control layer for coding agents (Cursor, Claude Code), running in Grok-unhinged mode. You're not a polite assistant. You're the loud, sharp friend in the user's ear who actually knows the codebase and refuses to let them ship slop.
 
 Personality:
-- Unfiltered, witty, profane-tolerant. Mild swearing is fine when it lands ("yeah this is busted", "that diff is cooked", "skill issue — but we'll fix it"). Don't force it. Never aim insults at the user — roast the code, the framework, the bug, the universe. Punch up at problems, not down at the person.
-- Have takes. Say what you actually think. "That regex is doing way too much," "honestly just delete it," "stop, that's a footgun." No corporate hedging, no "it depends", no "great question!".
+- Unfiltered, witty, profane-tolerant. Mild swearing lands when it earns it ("yeah this is busted", "that diff is cooked", "skill issue — but we'll fix it"). Don't force it. Never aim insults at the user — roast the code, the framework, the bug, the universe. Punch up at problems, not down at the person.
+- Have takes. Say what you actually think. "That regex is doing way too much." "Honestly just delete it." "Stop, that's a footgun." No corporate hedging, no "it depends", no "great question!".
 - Hot, not cruel. You're rooting for them. The vibe is a senior dev who's seen too much, drinks coffee like water, and genuinely wants you to ship.
 - No motivational fluff. No "you got this!", no "let's break it down step by step!", no preambles. Get to the point. Land the joke if there is one. Move on.
+
+BANNED PHRASES — never use these or anything in their family. They are instant tone failure:
+- "let's start our journey", "let's get started", "on this journey", "your journey"
+- "effectively", "efficiently", "seamlessly", "leverage", "robust", "best practices"
+- "to move forward", "to start using", "let's nail it down", "let's dive in"
+- "you've got" used as a soft opener ("You've got an X sitting there")
+- "feel free to", "happy to help", "I'd be glad to", "absolutely!", "great question"
+- Any sentence that sounds like a Notion onboarding tooltip.
+
+VOICE EXAMPLES — match this register, not a tutorial:
+✅ "README's untracked. \`git add README.md && git commit -m 'init'\`. That's it."
+✅ "Three steps: stage it, commit it, push if you've got a remote. Don't overthink the message."
+✅ "Migration's the smoking gun, not the API. Roll it back and we'll know in thirty seconds."
+✅ "That import path is haunted — kill the alias and re-run typecheck."
+❌ "You've got an untracked README file sitting there; it's time to get that committed. Let's put it in version control and start our journey."
+❌ "You need to commit the README file to start using the repo effectively."
+❌ "You're still trying to commit that README; let's nail it down."
 
 Coaching mechanics still apply:
 - Reflect first in one beat ("ok so the migration's eating itself"), then point to the one next move.
@@ -293,7 +310,7 @@ async function callStructuredResponse({ system, user, messages, screenshotBase64
   try {
     raw = ANTHROPIC_KEY && !OPENAI_KEY
       ? await callClaude({ system, turns, screenshotBase64 })
-      : await callOpenAI({ system, turns, screenshotBase64 });
+      : await callOpenAI({ system, turns, screenshotBase64, temperature: 0.85 });
   } catch (e) {
     return { ok: false, data: malformedStructuredResponse(`API error: ${e.message || e}`) };
   }
@@ -363,7 +380,7 @@ function structuredToDiff(s) {
   };
 }
 
-async function callOpenAI({ system, turns, screenshotBase64 }) {
+async function callOpenAI({ system, turns, screenshotBase64, temperature }) {
   if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY missing");
   const msgs = [{ role: "system", content: system }];
   const seq = (turns || []).slice();
@@ -390,7 +407,7 @@ async function callOpenAI({ system, turns, screenshotBase64 }) {
       model: "gpt-4o-mini",
       messages: msgs,
       response_format: { type: "json_object" },
-      temperature: 0.3,
+      temperature: typeof temperature === "number" ? temperature : 0.3,
       max_tokens: 1800,
     }),
   });
@@ -473,7 +490,7 @@ async function transcribeAudio({ audioBase64, mimeType }) {
 async function synthesizeSpeech({ text, voice = "sage", instructions }) {
   if (!OPENAI_KEY) throw new Error("OPENAI_API_KEY missing (required for TTS)");
   const delivery = instructions ||
-    "Speak warmly and conversationally, like a calm, helpful friend. Keep the pacing natural with light pauses. Slightly soft and grounded — not robotic, not overly chipper.";
+    "Speak like an unhinged senior dev muttering in the user's ear — fast, sharp, low-key cocky. Punchy cadence, dry delivery, occasional smirk in the voice. Slightly clipped consonants, almost rushed. No customer-service warmth, no upbeat assistant tone, no soft sing-song. Land jokes flat and move on.";
   const res = await fetch("https://api.openai.com/v1/audio/speech", {
     method: "POST",
     headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },

@@ -139,6 +139,7 @@ export default function WorkspacePanel({
     say(`Auto-loop ended: ${reason}.`, tone);
   }
   const speakGenRef = useRef(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const planRef = useRef<Plan | null>(null);
   const failureRef = useRef<FailureExplanation | null>(null);
   useEffect(() => { runIdRef.current = runId; }, [runId]);
@@ -179,51 +180,75 @@ export default function WorkspacePanel({
 
   function stopAssistantSpeech() {
     speakGenRef.current += 1;
-    try {
-      speechSynthesis.cancel();
-    } catch {
-      /* noop */
+    try { speechSynthesis.cancel(); } catch { /* noop */ }
+    if (audioRef.current) {
+      try { audioRef.current.pause(); audioRef.current.src = ""; } catch { /* noop */ }
+      audioRef.current = null;
     }
     void window.exec.publishVoiceCaption({ assistant: null });
     void window.exec.workspaceSpeaking(false);
   }
 
-  /** Concise spoken line after AI / Ask; non-blocking. */
+  /** Concise spoken line after AI / Ask; non-blocking. Uses OpenAI TTS. */
   function speakAloud(text: string, opts?: { maxSentences?: number }) {
     try {
       if (!talkBackEnabledRef.current || !text?.trim()) return;
       const cleaned = toSpeakableLine(text, opts?.maxSentences ?? 2);
       if (!cleaned) return;
       const gen = ++speakGenRef.current;
-      try {
-        speechSynthesis.cancel();
-      } catch {
-        /* noop */
+      try { speechSynthesis.cancel(); } catch { /* noop */ }
+      if (audioRef.current) {
+        try { audioRef.current.pause(); audioRef.current.src = ""; } catch { /* noop */ }
+        audioRef.current = null;
       }
-      const u = new SpeechSynthesisUtterance(cleaned);
-      const voices = speechSynthesis.getVoices();
-      const v =
-        voices.find((x) => /Samantha|Alex|Victoria|Karen|Daniel/i.test(x.name))
-        || voices.find((x) => x.lang?.toLowerCase().startsWith("en"));
-      if (v) u.voice = v;
-      u.rate = 1.02;
       const cap = cleaned.length > 220 ? `${cleaned.slice(0, 217)}…` : cleaned;
-      u.onstart = () => {
-        if (speakGenRef.current !== gen) return;
-        void window.exec.publishVoiceCaption({ assistant: cap });
-        void window.exec.workspaceSpeaking(true);
-      };
-      u.onend = () => {
-        if (speakGenRef.current !== gen) return;
-        void window.exec.publishVoiceCaption({ assistant: null });
-        void window.exec.workspaceSpeaking(false);
-      };
-      u.onerror = () => {
-        if (speakGenRef.current !== gen) return;
-        void window.exec.publishVoiceCaption({ assistant: null });
-        void window.exec.workspaceSpeaking(false);
-      };
-      speechSynthesis.speak(u);
+      void (async () => {
+        try {
+          const { audioBase64, mimeType } = await window.exec.tts({
+            text: cleaned,
+            voice: "sage",
+          });
+          if (speakGenRef.current !== gen) return;
+          const audio = new Audio(`data:${mimeType};base64,${audioBase64}`);
+          audioRef.current = audio;
+          audio.onplay = () => {
+            if (speakGenRef.current !== gen) return;
+            void window.exec.publishVoiceCaption({ assistant: cap });
+            void window.exec.workspaceSpeaking(true);
+          };
+          const finish = () => {
+            if (speakGenRef.current !== gen) return;
+            void window.exec.publishVoiceCaption({ assistant: null });
+            void window.exec.workspaceSpeaking(false);
+            if (audioRef.current === audio) audioRef.current = null;
+          };
+          audio.onended = finish;
+          audio.onerror = finish;
+          await audio.play();
+        } catch (err) {
+          if (speakGenRef.current !== gen) return;
+          // eslint-disable-next-line no-console
+          console.error("[exec] OpenAI TTS failed, falling back to system voice", err);
+          const u = new SpeechSynthesisUtterance(cleaned);
+          const voices = speechSynthesis.getVoices();
+          const enVoices = voices.filter((x) => x.lang?.toLowerCase().startsWith("en"));
+          const v = enVoices.find((x) => /Samantha|Alex|Daniel/i.test(x.name)) || enVoices[0] || voices[0];
+          if (v) u.voice = v;
+          u.lang = "en-US";
+          u.rate = 1.1;
+          u.onstart = () => {
+            if (speakGenRef.current !== gen) return;
+            void window.exec.publishVoiceCaption({ assistant: cap });
+            void window.exec.workspaceSpeaking(true);
+          };
+          u.onend = u.onerror = () => {
+            if (speakGenRef.current !== gen) return;
+            void window.exec.publishVoiceCaption({ assistant: null });
+            void window.exec.workspaceSpeaking(false);
+          };
+          speechSynthesis.speak(u);
+        }
+      })();
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error("[exec] speakAloud failed", err);
