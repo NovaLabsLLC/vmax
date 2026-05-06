@@ -23,15 +23,18 @@ const {
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const { spawn } = require("child_process");
 const { scanRepo, summarizeDiffText } = require("../utils/repoContext.js");
 const sessions = require("../utils/sessions.js");
+const { createProject } = require("../utils/projects.js");
 const {
   planTask,
   explainFailure,
   summarizeDiff,
   transcribeAudio,
   synthesizeSpeech,
+  askAssistant,
 } = require("../utils/aiClient.js");
 const { getCommandBlockReason, CURSOR_CLIPBOARD_SAFETY_FOOTER, EXIT_POLICY_BLOCK } = require("../utils/commandSafety.js");
 
@@ -97,8 +100,10 @@ function createCommandWindow() {
 }
 
 // ---- Overlay window ----
-const PILL_WIDTH = 460;
+const PILL_WIDTH = 600;
 const PILL_HEIGHT = 64;
+/** Total overlay content height when Vmax response panel is open (pill + body). */
+const OVERLAY_EXPANDED_HEIGHT = 540;
 /** Extra height above the pill row when the caption / dialogue strip is open */
 const OVERLAY_CAPTION_ZONE = 100;
 
@@ -182,11 +187,13 @@ function sendToOverlay(channel, payload) {
   }
 }
 
+ipcMain.handle("pill:interrupt-speech", () => sendToCommandCenter("pill:interrupt-speech"));
 ipcMain.handle("pill:transcript", (_evt, text) => sendToCommandCenter("pill:transcript", text));
 ipcMain.handle("pill:voice-question", (_evt, text) => sendToCommandCenter("pill:voice-question", text));
 ipcMain.handle("pill:request-cursor", () => sendToCommandCenter("pill:request-cursor"));
 ipcMain.handle("pill:toggle-screen", () => sendToCommandCenter("pill:toggle-screen"));
 ipcMain.handle("workspace:status", (_evt, status) => sendToOverlay("workspace:status", status));
+ipcMain.handle("workspace:speaking", (_evt, speaking) => sendToOverlay("workspace:speaking", !!speaking));
 ipcMain.handle("overlay:set-caption-open", (_evt, open) => {
   setOverlayCaptionOpen(!!open);
 });
@@ -195,6 +202,26 @@ ipcMain.on("overlay:set-caption-open-sync", (_evt, open) => {
 });
 ipcMain.handle("voice:publish-caption", (_evt, payload) => {
   sendToOverlay("voice:caption", payload || {});
+});
+
+ipcMain.handle("overlay:set-expanded", (_evt, { expanded }) => {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return false;
+  const targetH = expanded ? OVERLAY_EXPANDED_HEIGHT : PILL_HEIGHT;
+  const [x, y] = overlayWindow.getPosition();
+  const [, curH] = overlayWindow.getContentSize();
+  overlayWindow.setContentSize(PILL_WIDTH, targetH);
+  overlayWindow.setPosition(x, y + (curH - targetH));
+  return true;
+});
+
+ipcMain.handle("exec:publish-vmax-response", (_evt, payload) => {
+  sendToOverlay("vmax:response", payload || {});
+  return true;
+});
+
+ipcMain.handle("exec:vmax-panel-action", (_evt, payload) => {
+  sendToCommandCenter("vmax-panel:action", payload || {});
+  return true;
 });
 
 // Click-through control (overlay only, but harmless for command window)
@@ -242,6 +269,7 @@ ipcMain.handle("exec:get-settings", () => {
     anthropicApiKey: sett.anthropicApiKey || "",
     cursorAutoSend: sett.cursorAutoSend !== false,
     defaultProvider: sett.defaultProvider || "auto",
+    talkBack: sett.talkBack !== false,
   };
 });
 ipcMain.handle("exec:save-settings", (_evt, settings) => {
@@ -249,14 +277,36 @@ ipcMain.handle("exec:save-settings", (_evt, settings) => {
   s.settings = { ...(s.settings || {}), ...settings };
   writeState(s);
   applySettingsToEnv();
-  return s.settings;
+  const merged = s.settings || {};
+  for (const w of [commandWindow, overlayWindow]) {
+    if (w && !w.isDestroyed()) {
+      try {
+        w.webContents.send("exec:settings-updated", merged);
+      } catch { /* ignore */ }
+    }
+  }
+  return merged;
 });
 
+function broadcastSessionsUpdated() {
+  sendToCommandCenter("sessions:updated");
+}
 ipcMain.handle("sessions:list", () => sessions.list(app));
 ipcMain.handle("sessions:get", (_evt, id) => sessions.get(app, id));
-ipcMain.handle("sessions:save", (_evt, s) => sessions.save(app, s));
-ipcMain.handle("sessions:delete", (_evt, id) => sessions.remove(app, id));
-ipcMain.handle("sessions:new", (_evt, seed) => sessions.create(app, seed || {}));
+ipcMain.handle("sessions:save", (_evt, s) => {
+  const out = sessions.save(app, s);
+  broadcastSessionsUpdated();
+  return out;
+});
+ipcMain.handle("sessions:delete", (_evt, id) => {
+  sessions.remove(app, id);
+  broadcastSessionsUpdated();
+});
+ipcMain.handle("sessions:new", (_evt, seed) => {
+  const out = sessions.create(app, seed || {});
+  broadcastSessionsUpdated();
+  return out;
+});
 
 ipcMain.handle("exec:onboarding-done", () => {
   const s = readState();
@@ -319,6 +369,50 @@ ipcMain.handle("exec:copy", (_evt, text) => {
   return true;
 });
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Run AppleScript from a temp file (more reliable than multiline `osascript -e`). */
+function runApplescriptFile(source) {
+  const tmp = path.join(os.tmpdir(), `exec-cursor-${process.pid}-${Date.now()}.scpt`);
+  fs.writeFileSync(tmp, source.trim() + "\n", "utf8");
+  return new Promise((resolve) => {
+    const child = spawn("osascript", [tmp]);
+    let stderr = "";
+    child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.on("close", (code) => {
+      try {
+        fs.unlinkSync(tmp);
+      } catch {
+        /* ignore */
+      }
+      resolve({ code, stderr });
+    });
+  });
+}
+
+/** Key after ⌘: "i" = Composer/Agent, "l" = Chat pane (fallback). */
+function cursorPasteApplescript(openKey) {
+  return `
+tell application "Cursor" to activate
+delay 2.0
+tell application "System Events"
+  tell process "Cursor"
+    set frontmost to true
+  end tell
+  delay 0.35
+  key code 53
+  delay 0.25
+  keystroke "${openKey}" using {command down}
+  delay 1.05
+  keystroke "v" using {command down}
+  delay 0.45
+  key code 36
+end tell
+`;
+}
+
 ipcMain.handle("exec:send-to-cursor-chat", async (_evt, { repoPath, prompt }) => {
   if (process.platform !== "darwin")
     return { ok: false, reason: "platform", message: "Auto-send is only wired up on macOS." };
@@ -332,7 +426,9 @@ ipcMain.handle("exec:send-to-cursor-chat", async (_evt, { repoPath, prompt }) =>
   }
 
   clipboard.writeText(String(prompt ?? "") + CURSOR_CLIPBOARD_SAFETY_FOOTER);
+  await sleep(280);
 
+  let openedRepoVia = "none";
   await new Promise((resolve) => {
     const tryRun = (cmd, args) => new Promise((res) => {
       const c = spawn(cmd, args, { detached: true, stdio: "ignore" });
@@ -340,36 +436,55 @@ ipcMain.handle("exec:send-to-cursor-chat", async (_evt, { repoPath, prompt }) =>
       c.on("spawn", () => { c.unref(); res(true); });
     });
     (async () => {
-      if (await tryRun("cursor", [repoPath])) return resolve();
-      if (await tryRun("open", ["-a", "Cursor", repoPath])) return resolve();
+      if (await tryRun("cursor", [repoPath])) {
+        openedRepoVia = "cursor-cli";
+        return resolve();
+      }
+      if (await tryRun("open", ["-a", "Cursor", repoPath])) {
+        openedRepoVia = "open-app";
+        return resolve();
+      }
       resolve();
     })();
   });
 
-  // ⌘I opens Cursor's Composer / Agent (the surface that runs autonomous
-  // edits). ⌘L opens the simpler Ask / Chat. We default to ⌘I because the
-  // user almost always wants the prompt to drive the agent, not just chat.
-  const script = `
-    delay 0.7
-    tell application "Cursor" to activate
-    delay 0.5
-    tell application "System Events"
-      keystroke "i" using {command down}
-      delay 0.3
-      keystroke "v" using {command down}
-      delay 0.2
-      key code 36
-    end tell
-  `;
-  return new Promise((resolve) => {
-    const child = spawn("osascript", ["-e", script]);
-    let stderr = "";
-    child.stderr.on("data", (d) => (stderr += d.toString()));
-    child.on("close", (code) => {
-      if (code === 0) resolve({ ok: true });
-      else resolve({ ok: false, reason: "osascript", message: stderr || `osascript exit ${code}` });
-    });
-  });
+  await sleep(openedRepoVia === "none" ? 400 : 750);
+
+  const base = { openedRepoVia };
+  let first = await runApplescriptFile(cursorPasteApplescript("i"));
+  if (first.code !== 0) {
+    const second = await runApplescriptFile(cursorPasteApplescript("l"));
+    if (second.code === 0) {
+      return {
+        ok: true,
+        pastedVia: "applescript",
+        pasteShortcut: "⌘L",
+        ...base,
+      };
+    }
+    first = second;
+  } else {
+    return { ok: true, pastedVia: "applescript", pasteShortcut: "⌘I", ...base };
+  }
+
+  let urlOk = false;
+  try {
+    const pathPart = repoPath.startsWith("/") ? repoPath : `/${repoPath}`;
+    await shell.openExternal("cursor://file" + pathPart);
+    urlOk = true;
+  } catch {
+    /* ignore */
+  }
+  return {
+    ok: true,
+    pastedVia: "clipboard-only",
+    automationFailed: true,
+    pasteShortcut: "⌘I+⌘L",
+    ...base,
+    message: urlOk
+      ? "Tried ⌘I and ⌘L automation; clipboard is ready — focus Cursor and press ⌘V in Agent or Chat."
+      : first.stderr || "AppleScript failed for ⌘I and ⌘L — prompt is on the clipboard.",
+  };
 });
 
 // ---- streaming command runner ----
@@ -436,15 +551,14 @@ ipcMain.handle("exec:openclaw-agent", (evt, { runId, repoPath, message }) => {
   return { started: true };
 });
 
-// Claude Code CLI bridge: spawn `claude -p <prompt>` (no shell, prompt as a
-// single argv so we don't have to worry about quoting). Streams stdout/stderr
-// over the same exec:run channels so the workspace's existing terminal +
-// activity wiring lights up. Missing binary yields a clear error.
-ipcMain.handle("exec:run-claude-cli", (evt, { runId, repoPath, prompt }) => {
+// Claude Code CLI: `claude -p "<prompt>"` in the selected repo (resolved cwd).
+// Streams on exec:run:* — never blocks the UI thread. Resolves { started: false }
+// when the binary is missing or cwd does not exist.
+ipcMain.handle("exec:run-claude-cli", async (evt, { runId, repoPath, prompt }) => {
   if (!repoPath || !prompt) throw new Error("repoPath and prompt required");
   const exe = process.env.CLAUDE_BIN || "claude";
+  const cwd = path.resolve(String(repoPath));
 
-  // Cap argv size — most shells / kernels handle ~256K but be conservative.
   let p = String(prompt);
   const maxArg = 200_000;
   if (p.length > maxArg) {
@@ -455,34 +569,64 @@ ipcMain.handle("exec:run-claude-cli", (evt, { runId, repoPath, prompt }) => {
     if (!evt.sender.isDestroyed()) evt.sender.send(channel, { runId, ...payload });
   };
 
-  send("exec:run:data", { stream: "meta", chunk: `\n$ ${exe} -p <prompt>\n` });
+  if (!fs.existsSync(cwd)) {
+    const msg = `Repo directory not found: ${cwd}`;
+    send("exec:run:end", { code: -1, error: msg });
+    return { started: false, error: msg };
+  }
 
-  let child;
-  try {
-    child = spawn(exe, ["-p", p], {
-      cwd: repoPath,
+  return await new Promise((resolve) => {
+    const child = spawn(exe, ["-p", p], {
+      cwd,
       env: { ...process.env, FORCE_COLOR: "0" },
       shell: false,
     });
-  } catch (err) {
-    send("exec:run:end", { code: -1, error: friendlyClaudeError(err) });
-    return { started: false };
-  }
-  runners.set(runId, child);
-  child.stdout.on("data", (d) => send("exec:run:data", { stream: "stdout", chunk: d.toString() }));
-  child.stderr.on("data", (d) => send("exec:run:data", { stream: "stderr", chunk: d.toString() }));
-  child.on("close", (code) => { runners.delete(runId); send("exec:run:end", { code }); });
-  child.on("error", (err) => {
-    runners.delete(runId);
-    send("exec:run:end", { code: -1, error: friendlyClaudeError(err) });
+
+    const failSpawn = (err) => {
+      runners.delete(runId);
+      const msg = friendlyClaudeError(err);
+      send("exec:run:end", { code: -1, error: msg });
+      resolve({ started: false, error: msg });
+    };
+
+    child.once("error", failSpawn);
+
+    child.once("spawn", () => {
+      child.removeListener("error", failSpawn);
+      runners.set(runId, child);
+      send("exec:run:data", {
+        stream: "meta",
+        chunk: `\n$ ${exe} -p "<prompt>"  (cwd: ${cwd})\n`,
+      });
+      child.stdout.on("data", (d) =>
+        send("exec:run:data", { stream: "stdout", chunk: d.toString() }),
+      );
+      child.stderr.on("data", (d) =>
+        send("exec:run:data", { stream: "stderr", chunk: d.toString() }),
+      );
+      child.on("close", (code) => {
+        runners.delete(runId);
+        send("exec:run:end", { code });
+      });
+      child.on("error", (err) => {
+        runners.delete(runId);
+        send("exec:run:end", { code: -1, error: friendlyClaudeError(err) });
+      });
+      resolve({ started: true });
+    });
   });
-  return { started: true };
 });
 
 function friendlyClaudeError(err) {
   const code = err && err.code;
   if (code === "ENOENT") {
-    return "Claude Code CLI not found on PATH. Install with `npm i -g @anthropic-ai/claude-code` (or set CLAUDE_BIN).";
+    return (
+      "Claude Code CLI not found on PATH. Install: npm i -g @anthropic-ai/claude-code "
+      + "— then restart Vmax — or set CLAUDE_BIN to the full path of the claude executable."
+    );
+  }
+  if (code === "EACCES") {
+    return "Claude Code CLI is not executable. Check permissions or set CLAUDE_BIN.";
   }
   return String((err && err.message) || err);
 }
@@ -497,6 +641,8 @@ ipcMain.handle("exec:run:cancel", (_evt, runId) => {
 // ---- AI ----
 ipcMain.handle("ai:transcribe", (_evt, payload) => transcribeAudio(payload));
 ipcMain.handle("ai:tts", (_evt, payload) => synthesizeSpeech(payload));
+ipcMain.handle("ai:ask", (_evt, payload) => askAssistant(payload));
+ipcMain.handle("exec:create-project", (_evt, payload) => createProject(payload || {}));
 ipcMain.handle("ai:plan", (_evt, payload) => planTask(payload));
 ipcMain.handle("ai:explain-failure", (_evt, payload) => explainFailure(payload));
 ipcMain.handle("ai:summarize-diff", (_evt, payload) =>

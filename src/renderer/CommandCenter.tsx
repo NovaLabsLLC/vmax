@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import HomePanel from "./panels/HomePanel";
 import WorkspacePanel from "./panels/WorkspacePanel";
 import ChatsPanel from "./panels/ChatsPanel";
@@ -6,7 +6,9 @@ import ProfilePanel from "./panels/ProfilePanel";
 import SettingsPanel from "./panels/SettingsPanel";
 import HelpPanel from "./panels/HelpPanel";
 import Onboarding from "./onboarding/Onboarding";
+import RepoContextStrip from "./components/RepoContextStrip";
 import { useScreen } from "./hooks/useScreen";
+import type { VmaxPanelAction } from "./types";
 
 type View = "home" | "workspace" | "chats" | "profile" | "settings" | "help";
 
@@ -17,25 +19,135 @@ export default function CommandCenter() {
   // Voice question dispatched from the floating pill. Lifted up here so it's
   // captured even when the user is on a different tab (Workspace might be
   // unmounted otherwise).
-  const [pendingVoiceQuestion, setPendingVoiceQuestion] = useState<string | null>(null);
+  const [pendingVoiceQuestion, setPendingVoiceQuestion] = useState<{ text: string; epoch: number } | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const vmaxOverlayExecutorRef = useRef<((action: VmaxPanelAction) => void) | null>(null);
+  const [savedRepoPath, setSavedRepoPath] = useState<string | null>(null);
+  const [savedRepoName, setSavedRepoName] = useState<string | null>(null);
+  const [repoSelectBusy, setRepoSelectBusy] = useState(false);
+  const [savedRepoEpoch, setSavedRepoEpoch] = useState(0);
+  const [repoListEpoch, setRepoListEpoch] = useState(0);
+  const [sessionListEpoch, setSessionListEpoch] = useState(0);
+  const [sidebarSessions, setSidebarSessions] = useState<{ id: string; title: string; updatedAt: number; repoName: string | null }[]>([]);
+
+  async function refreshSidebarSessions() {
+    try {
+      const rows = await window.exec.listSessions();
+      setSidebarSessions(rows.slice(0, 20));
+    } catch {
+      /* noop */
+    }
+  }
+  useEffect(() => { void refreshSidebarSessions(); }, [sessionListEpoch]);
+  useEffect(() => {
+    if (typeof window.exec.onSessionsUpdated !== "function") return;
+    return window.exec.onSessionsUpdated(() => {
+      void refreshSidebarSessions();
+    });
+  }, []);
+
+  // Start a new chat: optional repo to remember, optional question to seed.
+  // Always opens the floating overlay so the user can talk to it right away.
+  async function startNewChat(opts?: { repoPath?: string; question?: string }) {
+    if (opts?.repoPath) {
+      await window.exec.rememberRepo(opts.repoPath);
+      setSavedRepoEpoch((e) => e + 1);
+      setRepoListEpoch((e) => e + 1);
+      void refreshSavedRepoDisplay();
+    }
+    const repoPath = opts?.repoPath || (await window.exec.getLastRepo()) || undefined;
+    const session = await window.exec.newSession(repoPath ? { repoPath } : {});
+    setActiveSessionId(session.id);
+    setSessionListEpoch((e) => e + 1);
+    setView("workspace");
+    void window.exec.openOverlay();
+    if (opts?.question && opts.question.trim()) {
+      setPendingVoiceQuestion({ text: opts.question.trim(), epoch: Date.now() });
+    }
+  }
+
+  async function openExistingChat(id: string) {
+    setActiveSessionId(id);
+    setView("workspace");
+    void window.exec.openOverlay();
+  }
+
+  async function deleteSidebarChat(id: string) {
+    await window.exec.deleteSession(id);
+    if (activeSessionId === id) setActiveSessionId(null);
+    setSessionListEpoch((e) => e + 1);
+  }
+
+  useEffect(() => {
+    const sub = window.exec.onVmaxPanelAction;
+    if (typeof sub !== "function") return () => {};
+    return sub((action) => vmaxOverlayExecutorRef.current?.(action));
+  }, []);
 
   // Screen capture lives here so the pill's toggle works no matter which tab
   // is open. The latest frame is passed down to the workspace.
   const screenCap = useScreen();
+
+  async function refreshSavedRepoDisplay() {
+    const p = await window.exec.getLastRepo();
+    setSavedRepoPath(p);
+    if (p) {
+      const ctx = await window.exec.scanRepo(p);
+      setSavedRepoName(ctx?.ok ? ctx.name : null);
+    } else {
+      setSavedRepoName(null);
+    }
+  }
 
   useEffect(() => {
     (async () => {
       setOnboarded(await window.exec.isOnboarded());
       const p = await window.exec.getProfile();
       if (p?.name) setProfileName(p.name);
+      await refreshSavedRepoDisplay();
     })();
   }, []);
+
+  async function handleSelectRepo() {
+    setRepoSelectBusy(true);
+    try {
+      const p = await window.exec.pickRepo();
+      if (!p) return;
+      await window.exec.rememberRepo(p);
+      await refreshSavedRepoDisplay();
+      setSavedRepoEpoch((e) => e + 1);
+      setRepoListEpoch((e) => e + 1);
+    } finally {
+      setRepoSelectBusy(false);
+    }
+  }
+
+  function onRepoSavedFromChild() {
+    void refreshSavedRepoDisplay();
+    setSavedRepoEpoch((e) => e + 1);
+    setRepoListEpoch((e) => e + 1);
+  }
 
   useEffect(() => {
     const off = window.exec.onPillVoiceQuestion((text) => {
       setView("workspace");
-      setPendingVoiceQuestion(text);
+      // Wrap in an epoch so the consumer effect fires even when the same
+      // string comes in twice in a row.
+      setPendingVoiceQuestion({ text, epoch: Date.now() });
+    });
+    return () => off();
+  }, []);
+
+  // Stop Web Speech when the user hits Stop on the pill, even if Workspace isn't mounted.
+  useEffect(() => {
+    const off = window.exec.onPillInterruptSpeech(() => {
+      try {
+        speechSynthesis.cancel();
+      } catch {
+        /* noop */
+      }
+      void window.exec.publishVoiceCaption({ assistant: null });
+      void window.exec.workspaceSpeaking(false);
     });
     return () => off();
   }, []);
@@ -73,11 +185,28 @@ export default function CommandCenter() {
         view={view}
         onView={setView}
         profileName={profileName}
+        sessions={sidebarSessions}
+        activeSessionId={activeSessionId}
+        onOpenChat={(id) => void openExistingChat(id)}
+        onDeleteChat={(id) => void deleteSidebarChat(id)}
+        onNewChat={() => void startNewChat()}
       />
       <main className="flex-1 flex flex-col overflow-hidden">
         <div className="drag h-11 shrink-0 border-b border-white/[0.05]" />
+        <RepoContextStrip
+          path={savedRepoPath}
+          label={savedRepoName}
+          busy={repoSelectBusy}
+          onSelectRepo={() => void handleSelectRepo()}
+        />
         <div className="flex-1 overflow-y-auto">
-          {view === "home" && <HomePanel profileName={profileName} onGoSettings={() => setView("settings")} />}
+          {view === "home" && (
+            <HomePanel
+              profileName={profileName}
+              repoListEpoch={repoListEpoch}
+              onStartChat={(opts) => void startNewChat(opts)}
+            />
+          )}
           {view === "workspace" && (
             <WorkspacePanel
               pendingVoiceQuestion={pendingVoiceQuestion}
@@ -87,14 +216,19 @@ export default function CommandCenter() {
               onStartScreen={() => screenCap.start()}
               onStopScreen={() => screenCap.stop()}
               activeSessionId={activeSessionId}
-              onSessionChange={setActiveSessionId}
+              onSessionChange={(id) => {
+                setActiveSessionId(id);
+                setSessionListEpoch((e) => e + 1);
+              }}
+              registerVmaxPanelExecutor={(fn) => { vmaxOverlayExecutorRef.current = fn; }}
+              savedRepoEpoch={savedRepoEpoch}
             />
           )}
           {view === "chats" && (
             <ChatsPanel
               activeId={activeSessionId}
-              onOpen={(id) => { setActiveSessionId(id); setView("workspace"); }}
-              onNew={(id) => { setActiveSessionId(id); setView("workspace"); }}
+              onOpen={(id) => { void openExistingChat(id); }}
+              onNew={(id) => { setActiveSessionId(id); setView("workspace"); setSessionListEpoch((e) => e + 1); void window.exec.openOverlay(); }}
             />
           )}
           {view === "profile" && <ProfilePanel onSaved={(p) => setProfileName(p.name || "")} />}
@@ -110,13 +244,23 @@ function Sidebar({
   view,
   onView,
   profileName,
+  sessions,
+  activeSessionId,
+  onOpenChat,
+  onDeleteChat,
+  onNewChat,
 }: {
   view: View;
   onView: (v: View) => void;
   profileName: string;
+  sessions: { id: string; title: string; updatedAt: number; repoName: string | null }[];
+  activeSessionId: string | null;
+  onOpenChat: (id: string) => void;
+  onDeleteChat: (id: string) => void;
+  onNewChat: () => void;
 }) {
   return (
-    <aside className="w-[200px] shrink-0 border-r border-white/[0.05] bg-[#0a0a0c] flex flex-col">
+    <aside className="w-[220px] shrink-0 border-r border-white/[0.05] bg-[#0a0a0c] flex flex-col">
       {/* Spacer for traffic lights */}
       <div className="drag h-11 shrink-0 flex items-center pl-[76px] pr-3">
         <div className="text-[12.5px] font-semibold tracking-tight text-white/85">Exec</div>
@@ -125,13 +269,41 @@ function Sidebar({
       <nav className="px-2 py-2 space-y-0.5">
         <NavItem icon={<HomeIcon />} label="Home" active={view === "home"} onClick={() => onView("home")} />
         <NavItem icon={<TerminalIcon />} label="Workspace" active={view === "workspace"} onClick={() => onView("workspace")} />
-        <NavItem icon={<ChatIcon />} label="Chats" active={view === "chats"} onClick={() => onView("chats")} />
         <NavItem icon={<UserIcon />} label="Profile" active={view === "profile"} onClick={() => onView("profile")} />
         <NavItem icon={<GearIcon />} label="Settings" active={view === "settings"} onClick={() => onView("settings")} />
         <NavItem icon={<HelpIcon />} label="Help" active={view === "help"} onClick={() => onView("help")} />
       </nav>
 
-      <div className="mt-auto p-2">
+      <div className="mt-2 px-3 flex items-center justify-between">
+        <div className="text-[10px] uppercase tracking-[0.14em] text-white/40">Chats</div>
+        <button
+          onClick={onNewChat}
+          title="New chat"
+          className="text-[15px] leading-none text-white/55 hover:text-white px-1.5 py-0.5 rounded hover:bg-white/[0.06]"
+        >
+          +
+        </button>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-2 mt-1 space-y-0.5">
+        {sessions.length === 0 ? (
+          <div className="px-2 py-2 text-[11px] text-white/35 leading-relaxed">
+            No chats yet. Hit + or ask a voice question.
+          </div>
+        ) : (
+          sessions.map((s) => (
+            <SidebarChatRow
+              key={s.id}
+              row={s}
+              active={s.id === activeSessionId && view === "workspace"}
+              onOpen={() => onOpenChat(s.id)}
+              onDelete={() => onDeleteChat(s.id)}
+            />
+          ))
+        )}
+      </div>
+
+      <div className="p-2 border-t border-white/[0.05]">
         <button
           onClick={() => onView("profile")}
           className="w-full flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-white/[0.04] transition-colors"
@@ -144,6 +316,40 @@ function Sidebar({
         </button>
       </div>
     </aside>
+  );
+}
+
+function SidebarChatRow({
+  row, active, onOpen, onDelete,
+}: {
+  row: { id: string; title: string; updatedAt: number; repoName: string | null };
+  active: boolean;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      className={`group rounded-lg px-2 py-1.5 flex items-center gap-2 transition-colors
+        ${active
+          ? "bg-white/[0.07]"
+          : "hover:bg-white/[0.04]"}`}
+    >
+      <button onClick={onOpen} className="flex-1 min-w-0 text-left">
+        <div className={`text-[12px] truncate ${active ? "text-white" : "text-white/80"}`}>
+          {row.title || "Untitled"}
+        </div>
+        {row.repoName && (
+          <div className="text-[10px] text-white/40 truncate">{row.repoName}</div>
+        )}
+      </button>
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        className="opacity-0 group-hover:opacity-100 transition-opacity text-[12px] text-white/40 hover:text-red-300 px-1 leading-none"
+        title="Delete chat"
+      >
+        ×
+      </button>
+    </div>
   );
 }
 

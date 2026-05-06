@@ -1,21 +1,113 @@
 import React, { useEffect, useState } from "react";
 import { useVoiceCapture } from "./hooks/useVoiceCapture";
+import { subscribeSettingsUpdated } from "./utils/subscribeSettingsUpdated";
+import VmaxExpandedPanel from "./components/VmaxExpandedPanel";
+import type { VmaxOverlayBroadcast, VmaxPanelPayload } from "./types";
 
-// Pill-sized window (~460x64) using macOS native vibrancy. The whole window
-// is the glass material — body fills it edge to edge — so we don't need a
-// dark fill; the OS material paints the right tint over whatever is behind.
-
+// Floating bar + expandable Vmax response (macOS vibrancy glass).
 export default function OverlayApp() {
   const voice = useVoiceCapture();
   const [status, setStatus] = useState<{ active?: boolean; busy?: boolean; screen?: boolean }>({});
+  const [talkBack, setTalkBack] = useState(true);
+  const [speaking, setSpeaking] = useState(false);
   const screenOn = !!status.screen;
+
+  const [vmaxUi, setVmaxUi] = useState<{
+    phase: "idle" | "loading" | "ready" | "error";
+    question: string;
+    panel: VmaxPanelPayload | null;
+    parseWarning?: boolean;
+    errorMsg?: string;
+  }>({ phase: "idle", question: "", panel: null });
+
+  /** Window is tall enough to show the response surface */
+  const [surfaceExpanded, setSurfaceExpanded] = useState(false);
+
   useEffect(() => {
     const off = window.exec.onWorkspaceStatus((s) => setStatus((prev) => ({ ...prev, ...s })));
     return () => off();
   }, []);
 
+  useEffect(() => {
+    void window.exec.getSettings().then((s) => setTalkBack(s.talkBack !== false));
+  }, []);
+
+  useEffect(() => {
+    return subscribeSettingsUpdated((sett) => {
+      if (typeof sett.talkBack === "boolean") setTalkBack(sett.talkBack);
+    });
+  }, []);
+
+  useEffect(() => {
+    const off = window.exec.onWorkspaceSpeaking((s) => setSpeaking(!!s));
+    return () => off();
+  }, []);
+
+  useEffect(() => {
+    const sub = window.exec.onVmaxResponse;
+    if (typeof sub !== "function") return () => {};
+    return sub((msg: VmaxOverlayBroadcast) => {
+      if (msg.phase === "loading") {
+        // Wipe everything from the previous turn so we never flash a stale
+        // answer beneath the loading skeleton.
+        setVmaxUi({
+          phase: "loading",
+          question: msg.question || "",
+          panel: null,
+          parseWarning: false,
+          errorMsg: undefined,
+        });
+        setSurfaceExpanded(true);
+        void window.exec.setOverlayExpanded?.(true);
+      }
+      if (msg.phase === "ready") {
+        setVmaxUi({
+          phase: "ready",
+          question: msg.question,
+          panel: msg.panel,
+          parseWarning: msg.parseWarning,
+          errorMsg: undefined,
+        });
+        setSurfaceExpanded(true);
+      }
+      if (msg.phase === "error") {
+        setVmaxUi((prev) => ({
+          phase: "error",
+          question: prev.question,
+          panel: null,
+          errorMsg: msg.message,
+        }));
+        setSurfaceExpanded(true);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    let stopWatcher: (() => void) | null = null;
+    const off = window.exec.onWorkspaceSpeaking(async (isSpeaking) => {
+      if (stopWatcher) { stopWatcher(); stopWatcher = null; }
+      if (!isSpeaking) return;
+      if (voice.state !== "idle") return;
+      try {
+        stopWatcher = await voice.watchForSpeech(async () => {
+          if (stopWatcher) { stopWatcher(); stopWatcher = null; }
+          try { await window.exec.pillInterruptSpeech(); } catch { /* noop */ }
+          handleVoice();
+        }, { threshold: 0.06, minMs: 220 });
+      } catch (err) {
+        console.error("barge-in watcher failed", err);
+      }
+    });
+    return () => {
+      off();
+      if (stopWatcher) stopWatcher();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voice.state]);
+
   async function handleVoice() {
     if (voice.state !== "idle") { voice.cancel(); return; }
+    try { await window.exec.pillInterruptSpeech(); } catch { /* noop */ }
     const result = await voice.start({ silenceMs: 1200, maxMs: 15000, threshold: 0.025 });
     if (!result) return;
     try {
@@ -36,6 +128,43 @@ export default function OverlayApp() {
     await window.exec.focusCommandCenter();
   }
 
+  async function toggleTalkBack() {
+    const next = !talkBack;
+    setTalkBack(next);
+    try {
+      await window.exec.saveSettings({ talkBack: next });
+    } catch {
+      setTalkBack(!next);
+    }
+  }
+
+  async function stopSpeaking() {
+    try {
+      await window.exec.pillInterruptSpeech();
+    } catch {
+      /* noop */
+    }
+  }
+
+  async function collapseResponseSurface() {
+    setSurfaceExpanded(false);
+    if (typeof window.exec.setOverlayExpanded === "function") {
+      await window.exec.setOverlayExpanded(false);
+    }
+  }
+
+  async function reopenResponseSurface() {
+    setSurfaceExpanded(true);
+    if (typeof window.exec.setOverlayExpanded === "function") {
+      await window.exec.setOverlayExpanded(true);
+    }
+  }
+
+  function pushPanelAction(action: Parameters<typeof window.exec.vmaxPanelAction>[0]) {
+    if (typeof window.exec.vmaxPanelAction !== "function") return;
+    void window.exec.vmaxPanelAction(action);
+  }
+
   const busy =
     voice.state === "finalizing" || voice.state === "listening" || !!status.busy;
 
@@ -50,14 +179,15 @@ export default function OverlayApp() {
             ? "bg-emerald-400"
             : "bg-white/55";
 
+  const showVmaxBody = surfaceExpanded && (vmaxUi.phase === "loading" || vmaxUi.phase === "ready" || vmaxUi.phase === "error");
+  const canReopenPanel = !surfaceExpanded && vmaxUi.phase === "ready" && vmaxUi.panel;
+
   return (
     <div
-      className={`flex w-full h-full items-center px-2 gap-2 overflow-hidden select-none
-                  rounded-[20px] ring-1 ring-white/15 ring-inset
-                  shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]
+      className={`h-full flex flex-col overflow-hidden select-none
                   ${busy ? "shimmer-sweep" : ""}`}
     >
-        {/* Drag handle */}
+      <div className="shrink-0 flex w-full items-center px-2 gap-2 overflow-hidden min-h-[64px]">
         <div
           className="drag h-10 px-2 flex items-center cursor-grab active:cursor-grabbing
                      hover:bg-white/[0.08] rounded-full transition-colors"
@@ -66,7 +196,6 @@ export default function OverlayApp() {
           <DragGrip />
         </div>
 
-        {/* Brand / focus command center */}
         <button
           onClick={focusCC}
           title="Open Command Center"
@@ -96,14 +225,92 @@ export default function OverlayApp() {
           <ScreenIcon recording={screenOn} />
         </PillButton>
 
-      <PillButton
-        title="Send latest plan to Cursor"
-        onClick={fireCursor}
-        state="idle"
-        activeBg="bg-white text-black"
-      >
-        <CursorIcon />
-      </PillButton>
+        <PillButton
+          title="Send latest plan to Cursor"
+          onClick={fireCursor}
+          state="idle"
+          activeBg="bg-white text-black"
+        >
+          <CursorIcon />
+        </PillButton>
+
+        <PillButton
+          title={talkBack ? "Talk Back on — short spoken summaries after AI or OpenClaw" : "Talk Back off"}
+          onClick={() => void toggleTalkBack()}
+          state={talkBack ? "active" : "idle"}
+          activeBg="bg-cyan-500/88 text-white shadow-[0_0_22px_-3px_rgba(34,211,238,0.85)]"
+        >
+          <SpeakerIcon on={talkBack} />
+        </PillButton>
+
+        {canReopenPanel ? (
+          <button
+            type="button"
+            title="Show last Vmax answer"
+            onClick={() => void reopenResponseSurface()}
+            className="no-drag h-10 w-10 rounded-full flex items-center justify-center transition-all active:scale-[0.94]
+                       bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/35 text-emerald-100"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M6 15l6-6 6 6" />
+            </svg>
+          </button>
+        ) : null}
+
+        {speaking ? (
+          <>
+            <span className="no-drag text-[10px] text-cyan-100/80 whitespace-nowrap font-medium tracking-tight animate-pulse">
+              Speaking…
+            </span>
+            <button
+              type="button"
+              title="Stop speaking"
+              onClick={() => void stopSpeaking()}
+              className="no-drag shrink-0 h-8 px-2.5 rounded-full text-[10.5px] font-medium
+                         bg-white/14 hover:bg-white/22 border border-white/18 text-white/95"
+            >
+              Stop
+            </button>
+          </>
+        ) : null}
+      </div>
+
+      {showVmaxBody ? (
+        <div className="no-drag flex-1 min-h-0 flex flex-col px-2 pb-2 pt-0">
+          {vmaxUi.phase === "loading" ? (
+            <div className="flex-1 min-h-[200px] rounded-[16px] border border-white/[0.1] bg-black/[0.2] p-4 space-y-3 animate-pulse">
+              <div className="h-3 rounded bg-white/[0.12] w-1/3" />
+              <div className="h-20 rounded-lg bg-white/[0.06]" />
+              <div className="h-14 rounded-lg bg-white/[0.06] w-4/5" />
+              <div className="h-14 rounded-lg bg-white/[0.06] w-3/5" />
+            </div>
+          ) : null}
+
+          {vmaxUi.phase === "error" ? (
+            <div className="rounded-xl border border-rose-400/30 bg-rose-500/[0.08] px-3 py-2 text-[12px] text-rose-100/90">
+              {vmaxUi.errorMsg || "Something went wrong."}
+            </div>
+          ) : null}
+
+          {vmaxUi.phase === "ready" && vmaxUi.panel ? (
+            <VmaxExpandedPanel
+              question={vmaxUi.question}
+              panel={vmaxUi.panel}
+              parseWarning={vmaxUi.parseWarning}
+              onCollapse={() => void collapseResponseSurface()}
+              onCopyCursor={() => void window.exec.copy(vmaxUi.panel!.cursorPrompt || "")}
+              onSendClaude={() => pushPanelAction({ type: "run-claude", prompt: vmaxUi.panel!.claudePrompt || vmaxUi.panel!.cursorPrompt })}
+              onOpenClaw={() =>
+                pushPanelAction({
+                  type: "openclaw",
+                  question: vmaxUi.question,
+                  panel: vmaxUi.panel!,
+                })}
+              onRunSafeCommand={(cmd) => pushPanelAction({ type: "run-command", command: cmd })}
+            />
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -187,6 +394,22 @@ function CursorIcon() {
     <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
       <line x1="5" y1="12" x2="19" y2="12" />
       <polyline points="13 6 19 12 13 18" />
+    </svg>
+  );
+}
+
+function SpeakerIcon({ on }: { on: boolean }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
+      <path d="M12 6 7 9H4v6h3l5 3V6Z" />
+      {on ? (
+        <>
+          <path d="M16 9a4 4 0 0 1 0 6" className="opacity-95" />
+          <path d="M17.5 7a7 7 0 0 1 0 10" className="opacity-70" />
+        </>
+      ) : (
+        <line x1="17" y1="7" x2="11" y2="17" />
+      )}
     </svg>
   );
 }

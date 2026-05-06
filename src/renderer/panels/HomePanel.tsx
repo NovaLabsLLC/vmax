@@ -2,59 +2,69 @@ import React, { useEffect, useRef, useState } from "react";
 import type { RepoContext } from "../types";
 
 type RepoCard = { path: string; ctx: RepoContext | null };
+type StartChatOpts = { repoPath?: string; question?: string };
 
 export default function HomePanel({
   profileName,
-  onGoSettings,
+  repoListEpoch = 0,
+  onStartChat,
 }: {
   profileName?: string;
-  onGoSettings: () => void;
+  repoListEpoch?: number;
+  onStartChat: (opts?: StartChatOpts) => void;
 }) {
   const [recents, setRecents] = useState<RepoCard[]>([]);
-  const [busy, setBusy] = useState(false);
   const [task, setTask] = useState("");
-  const openingOverlayRef = useRef(false);
+  const [picking, setPicking] = useState(false);
+  const submittedRef = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       const paths = await window.exec.getRecentRepos();
       const cards = await Promise.all(paths.map(async (p) => ({ path: p, ctx: await window.exec.scanRepo(p) })));
-      setRecents(cards);
+      if (!cancelled) setRecents(cards);
     })();
-  }, []);
+    return () => { cancelled = true; };
+  }, [repoListEpoch]);
 
   const primary = recents[0];
 
-  async function startExec(repoPath?: string) {
-    if (busy || openingOverlayRef.current) return;
-    openingOverlayRef.current = true;
-    setBusy(true);
-    try {
-      if (repoPath) await window.exec.rememberRepo(repoPath);
-      await window.exec.openOverlay();
-    } finally {
-      setBusy(false);
-      openingOverlayRef.current = false;
-    }
+  function startChat(opts?: StartChatOpts) {
+    if (submittedRef.current) return;
+    submittedRef.current = true;
+    onStartChat(opts);
+    // Allow another start once unmounted / view changes; reset shortly.
+    setTimeout(() => { submittedRef.current = false; }, 400);
   }
-  async function pickAndStart() {
-    if (busy || openingOverlayRef.current) return;
-    openingOverlayRef.current = true;
-    setBusy(true);
+
+  function submitTask() {
+    const q = task.trim();
+    setTask("");
+    startChat({ repoPath: primary?.path, question: q || undefined });
+  }
+
+  async function pickRepoAndStart() {
+    if (picking) return;
+    setPicking(true);
     try {
       const p = await window.exec.pickRepo();
       if (!p) return;
-      await window.exec.rememberRepo(p);
-      await window.exec.openOverlay();
+      startChat({ repoPath: p });
     } finally {
-      setBusy(false);
-      openingOverlayRef.current = false;
+      setPicking(false);
+    }
+  }
+
+  function onTextareaKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      submitTask();
     }
   }
 
   return (
     <div className="max-w-[760px] mx-auto px-6 pt-6 pb-10 space-y-6">
-      {/* Hero */}
       <section className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5">
         <div className="flex items-start gap-4">
           <div className="w-10 h-10 rounded-lg bg-white text-black flex items-center justify-center text-[15px] font-bold shrink-0">E</div>
@@ -63,40 +73,41 @@ export default function HomePanel({
               {profileName ? `Ready when you are, ${profileName}.` : "Ready when you are."}
             </div>
             <div className="text-[12.5px] text-white/55 leading-relaxed mt-0.5">
-              One button starts an AI control layer. It sees your repo and task, plans, runs checks,
-              explains failures, and tells Cursor exactly what to do next.
+              Type a task or paste a Linear ticket and I'll start a new chat. The floating bar pops up so you can talk it through.
             </div>
           </div>
         </div>
 
         <div className="mt-4">
           <textarea
+            autoFocus
             value={task}
             onChange={(e) => setTask(e.target.value)}
-            rows={2}
-            placeholder="Optional — paste a Linear ticket. You can also do this after Start."
+            onKeyDown={onTextareaKeyDown}
+            rows={3}
+            placeholder="What are we doing? (Optional — you can also just hit New chat and talk to the bar.)"
             className="w-full bg-white/[0.03] border border-white/[0.08] rounded-xl
-                       px-3 py-2 text-[13px] text-white placeholder-white/30 leading-relaxed
+                       px-3 py-2.5 text-[13px] text-white placeholder-white/30 leading-relaxed
                        outline-none focus:border-white/20 resize-none"
           />
+          <div className="mt-1 text-[10.5px] text-white/35">⌘↩ to start the chat</div>
         </div>
 
-        <div className="mt-4 flex items-center gap-2">
+        <div className="mt-3 flex items-center gap-2">
           <button
-            onClick={() => startExec(primary?.path)}
-            disabled={busy}
-            className={`h-10 px-5 rounded-xl text-[13px] font-medium tracking-tight
-                        bg-white text-black hover:bg-white/90
-                        shadow-[0_0_24px_-4px_rgba(255,255,255,0.45)]
-                        ${busy ? "opacity-60 cursor-wait" : ""}`}
+            onClick={submitTask}
+            className="h-10 px-5 rounded-xl text-[13px] font-medium tracking-tight
+                       bg-white text-black hover:bg-white/90
+                       shadow-[0_0_24px_-4px_rgba(255,255,255,0.45)]"
           >
-            {busy ? "Starting…" : primary ? `Start Exec — ${primary.ctx?.ok ? primary.ctx.name : basename(primary.path)}` : "Start Exec"}
+            {primary ? `New chat — ${primary.ctx?.ok ? primary.ctx.name : basename(primary.path)}` : "New chat"}
           </button>
           <button
-            onClick={pickAndStart}
-            disabled={busy}
-            className="h-10 px-3 rounded-xl text-[12.5px] text-white/75 hover:text-white
-                       bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08]"
+            onClick={pickRepoAndStart}
+            disabled={picking}
+            className={`h-10 px-3 rounded-xl text-[12.5px] text-white/75 hover:text-white
+                       bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08]
+                       ${picking ? "opacity-60 cursor-wait" : ""}`}
           >
             Pick a different repo…
           </button>
@@ -105,7 +116,7 @@ export default function HomePanel({
 
       {primary && (
         <Section title="Active project">
-          <ProjectCard card={primary} onClick={() => startExec(primary.path)} primary />
+          <ProjectCard card={primary} onClick={() => startChat({ repoPath: primary.path })} primary />
         </Section>
       )}
 
@@ -113,28 +124,11 @@ export default function HomePanel({
         <Section title="Recent projects">
           <div className="grid grid-cols-2 gap-2">
             {recents.slice(1).map((r) => (
-              <ProjectCard key={r.path} card={r} onClick={() => startExec(r.path)} />
+              <ProjectCard key={r.path} card={r} onClick={() => startChat({ repoPath: r.path })} />
             ))}
           </div>
         </Section>
       )}
-
-      <Section title="What Exec thinks you should do next">
-        <div className="space-y-1.5">
-          {buildSuggestions(primary).map((s, i) => (
-            <SuggestionRow key={i} text={s.text} action={s.action} onClick={() => startExec(primary?.path)} />
-          ))}
-        </div>
-      </Section>
-
-      <Section title="Reminders">
-        <div className="space-y-1.5">
-          <ReminderRow tone="info" text="Daily standup at 10:00." />
-          <ReminderRow tone="warn" text="Open PR #142 has 1 unresolved comment from Mike." />
-          <ReminderRow tone="success" text="Last typecheck on this repo: clean." />
-        </div>
-      </Section>
-
     </div>
   );
 }
@@ -179,42 +173,4 @@ function ProjectCard({
   );
 }
 
-function SuggestionRow({ text, action, onClick }: { text: string; action: string; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="w-full text-left rounded-lg bg-white/[0.025] border border-white/[0.05]
-                 hover:bg-white/[0.05] hover:border-white/[0.10] transition-colors
-                 px-3 py-2 flex items-center gap-3"
-    >
-      <span className="w-1.5 h-1.5 rounded-full bg-sky-400/90" />
-      <span className="text-[12.5px] text-white/85 flex-1">{text}</span>
-      <span className="text-[10.5px] text-white/45">{action}</span>
-    </button>
-  );
-}
-
-function ReminderRow({ text, tone }: { text: string; tone: "info" | "warn" | "success" }) {
-  const dot =
-    tone === "warn" ? "bg-amber-400"
-    : tone === "success" ? "bg-emerald-400"
-    : "bg-white/45";
-  return (
-    <div className="rounded-lg bg-white/[0.02] border border-white/[0.05] px-3 py-2 flex items-center gap-3">
-      <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
-      <span className="text-[12.5px] text-white/80">{text}</span>
-    </div>
-  );
-}
-
 function basename(p: string) { return p.split("/").filter(Boolean).pop() || p; }
-function buildSuggestions(primary: RepoCard | undefined): { text: string; action: string }[] {
-  if (!primary || !primary.ctx?.ok) return [{ text: "Pick a repo to get tactical, repo-aware suggestions.", action: "Start →" }];
-  const ctx = primary.ctx;
-  const out: { text: string; action: string }[] = [];
-  if (ctx.changedFiles.length > 0)
-    out.push({ text: `Summarize the diff in ${ctx.name} (${ctx.changedFiles.length} files changed).`, action: "Open Exec →" });
-  out.push({ text: `Run a typecheck on ${ctx.name} before pushing ${ctx.branch}.`, action: "Open Exec →" });
-  out.push({ text: "Plan a task — paste your Linear ticket and Exec drafts a tactical plan.", action: "Open Exec →" });
-  return out;
-}

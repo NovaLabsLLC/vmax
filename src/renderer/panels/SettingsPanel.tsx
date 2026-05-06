@@ -3,9 +3,10 @@ import React, { useEffect, useState } from "react";
 type Settings = {
   cursorAutoSend: boolean;
   defaultProvider: "auto" | "openai" | "claude";
+  talkBack: boolean;
 };
 
-const DEFAULT: Settings = { cursorAutoSend: true, defaultProvider: "auto" };
+const DEFAULT: Settings = { cursorAutoSend: true, defaultProvider: "auto", talkBack: true };
 
 export default function SettingsPanel() {
   const [s, setS] = useState<Settings>(DEFAULT);
@@ -14,7 +15,11 @@ export default function SettingsPanel() {
   useEffect(() => {
     (async () => {
       const cur = (await window.exec.getSettings()) as any;
-      setS({ cursorAutoSend: cur.cursorAutoSend !== false, defaultProvider: cur.defaultProvider || "auto" });
+      setS({
+        cursorAutoSend: cur.cursorAutoSend !== false,
+        defaultProvider: cur.defaultProvider || "auto",
+        talkBack: cur.talkBack !== false,
+      });
     })();
   }, []);
 
@@ -56,10 +61,17 @@ export default function SettingsPanel() {
         </div>
 
         <Toggle
-          label="Auto-send to Cursor chat"
-          sub="Drives Cursor with ⌘L → ⌘V → Return. Requires Accessibility permission."
+          label="Automate scans & Cursor handoff"
+          sub="When Ask proposes a repo scan or send-to-Cursor action, Exec runs it without waiting for a second “yes”. Opens Cursor via CLI or macOS open, then ⌘I → paste (clipboard fallback if automation fails). Requires Accessibility for Electron."
           value={s.cursorAutoSend}
           onChange={(v) => setS({ ...s, cursorAutoSend: v })}
+        />
+
+        <Toggle
+          label="Talk Back (spoken summaries)"
+          sub="After Plan, Ask, diff summary, diagnosis, or OpenClaw, Exec reads a short line aloud using the system voice. Toggle from Settings or the floating bar. Does not block the UI."
+          value={s.talkBack}
+          onChange={(v) => setS({ ...s, talkBack: v })}
         />
 
         <div className="flex items-center gap-2 pt-1">

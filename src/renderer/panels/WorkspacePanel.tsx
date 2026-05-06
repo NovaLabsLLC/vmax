@@ -1,19 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import RepoStrip from "../components/RepoStrip";
 import ActivityBar, { Activity } from "../components/ActivityBar";
+import MessageThread, { Msg } from "../components/MessageThread";
 import TaskPanel from "../components/TaskPanel";
 import CommandCards from "../components/CommandCards";
 import ResultPanel from "../components/ResultPanel";
 import Terminal from "../components/Terminal";
 import TalkBack, { Bubble } from "../components/TalkBack";
-import type { RepoContext, Plan, FailureExplanation, DiffSummary } from "../types";
-import { buildOpenClawAgentMessage } from "../utils/openClawPrompt";
+import type { RepoContext, Plan, FailureExplanation, DiffSummary, VmaxPanelAction } from "../types";
+import { buildOpenClawAgentMessage, buildOpenClawFromAskPanel } from "../utils/openClawPrompt";
+import { buildOpenClawSpeakable, deriveSpeakable, proseToSpeakable, toSpeakableLine } from "../utils/talkBackText";
+import { subscribeSettingsUpdated } from "../utils/subscribeSettingsUpdated";
 
 type ResultKind = "idle" | "plan" | "failure" | "diff";
 type TermLine = { stream: "stdout" | "stderr" | "meta"; text: string };
 
 type Props = {
-  pendingVoiceQuestion?: string | null;
+  pendingVoiceQuestion?: { text: string; epoch: number } | null;
   onConsumeVoiceQuestion?: () => void;
   getScreenshot?: () => string | null;
   screenStatus?: "idle" | "requesting" | "granted" | "denied";
@@ -21,6 +24,9 @@ type Props = {
   onStopScreen?: () => void;
   activeSessionId?: string | null;
   onSessionChange?: (id: string | null) => void;
+  registerVmaxPanelExecutor?: (fn: ((action: VmaxPanelAction) => void) | null) => void;
+  /** Increment when user saves a repo from the global strip so Workspace can resync. */
+  savedRepoEpoch?: number;
 };
 
 export default function WorkspacePanel({
@@ -32,9 +38,13 @@ export default function WorkspacePanel({
   onStopScreen,
   activeSessionId,
   onSessionChange,
+  registerVmaxPanelExecutor,
+  savedRepoEpoch = 0,
 }: Props = {}) {
   // session
   const [active, setActive] = useState(false);
+  const activeRef = useRef(false);
+  useEffect(() => { activeRef.current = active; }, [active]);
   const [starting, setStarting] = useState(false);
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [repo, setRepo] = useState<RepoContext | null>(null);
@@ -73,6 +83,36 @@ export default function WorkspacePanel({
     setActivity((a) => (a ? { ...a, label } : null));
   }, []);
 
+  // chat thread (general Ask) — independent of repo
+  const [messages, setMessages] = useState<Msg[]>([]);
+  const [askPending, setAskPending] = useState(false);
+  /** Bumps TaskPanel to start listening after assistant asks for confirmation. */
+  const [micArmToken, setMicArmToken] = useState(0);
+  const messagesRef = useRef<Msg[]>([]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  // Action proposed by the AI but not yet executed — fires after the user
+  // confirms ("yes / go ahead / sure"). Null when nothing is pending.
+  const pendingActionRef = useRef<{ type: string; name?: string; prompt?: string } | null>(null);
+  const cursorAutoSendRef = useRef(true);
+  const talkBackEnabledRef = useRef(true);
+  const openclawVoiceContextRef = useRef<{ speakable?: string } | null>(null);
+  useEffect(() => {
+    void window.exec.getSettings().then((s) => {
+      cursorAutoSendRef.current = s.cursorAutoSend !== false;
+      talkBackEnabledRef.current = s.talkBack !== false;
+    });
+  }, []);
+  useEffect(() => {
+    return subscribeSettingsUpdated((sett) => {
+      if (typeof sett.talkBack === "boolean") {
+        talkBackEnabledRef.current = sett.talkBack;
+        if (!sett.talkBack) stopAssistantSpeech();
+      }
+      if (typeof sett.cursorAutoSend === "boolean") cursorAutoSendRef.current = sett.cursorAutoSend;
+    });
+  }, []);
+
   // bubbles
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const say = useCallback((text: string, tone: Bubble["tone"] = "info") => {
@@ -98,7 +138,6 @@ export default function WorkspacePanel({
     setLoop({ ...loopRef.current, active: false });
     say(`Auto-loop ended: ${reason}.`, tone);
   }
-  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const speakGenRef = useRef(0);
   const planRef = useRef<Plan | null>(null);
   const failureRef = useRef<FailureExplanation | null>(null);
@@ -124,51 +163,72 @@ export default function WorkspacePanel({
     if (screenStatus === "denied") say("Screen access denied. Open System Settings → Privacy → Screen Recording.", "warn");
   }, [screenStatus, say]);
 
-  // ---- voice output ----
-  async function speak(text: string) {
-    if (!text) return;
-    const cleaned = text
-      .replace(/```[\s\S]*?```/g, "")
-      .replace(/[*_`#>]/g, "")
-      .replace(/^\s*\d+\.\s+/gm, "")
-      .replace(/^\s*[-•]\s+/gm, "")
-      .replace(/\n{2,}/g, ". ")
-      .replace(/\n/g, " ")
-      .trim();
-    if (!cleaned) return;
-    const gen = ++speakGenRef.current;
-    const captionUi = cleaned.length > 220 ? `${cleaned.slice(0, 217)}…` : cleaned;
+  // ---- Talk Back — Web Speech API in renderer (fast, local). Gated by settings toggle. ----
+  useEffect(() => {
+    const warm = () => {
+      try {
+        speechSynthesis.getVoices();
+      } catch {
+        /* noop */
+      }
+    };
+    warm();
+    speechSynthesis.addEventListener("voiceschanged", warm);
+    return () => speechSynthesis.removeEventListener("voiceschanged", warm);
+  }, []);
+
+  function stopAssistantSpeech() {
+    speakGenRef.current += 1;
     try {
-      audioPlayerRef.current?.pause();
-      const { audioBase64, mimeType } = await window.exec.tts({ text: cleaned, voice: "nova" });
-      if (speakGenRef.current !== gen) return;
-      void window.exec.publishVoiceCaption({ assistant: captionUi });
-      const blob = b64ToBlob(audioBase64, mimeType);
-      const url = URL.createObjectURL(blob);
-      const a = new Audio(url);
-      const clearCaption = () => {
-        if (speakGenRef.current === gen) void window.exec.publishVoiceCaption({ assistant: null });
-      };
-      a.onended = () => {
-        URL.revokeObjectURL(url);
-        clearCaption();
-      };
-      a.onerror = () => {
-        URL.revokeObjectURL(url);
-        clearCaption();
-      };
-      audioPlayerRef.current = a;
-      await a.play();
-    } catch (err) {
-      if (speakGenRef.current === gen) void window.exec.publishVoiceCaption({ assistant: null });
-      console.error("TTS failed", err);
+      speechSynthesis.cancel();
+    } catch {
+      /* noop */
     }
+    void window.exec.publishVoiceCaption({ assistant: null });
+    void window.exec.workspaceSpeaking(false);
   }
-  function b64ToBlob(b64: string, mime: string): Blob {
-    const bin = atob(b64);
-    const arr = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    return new Blob([arr], { type: mime });
+
+  /** Concise spoken line after AI / Ask; non-blocking. */
+  function speakAloud(text: string, opts?: { maxSentences?: number }) {
+    try {
+      if (!talkBackEnabledRef.current || !text?.trim()) return;
+      const cleaned = toSpeakableLine(text, opts?.maxSentences ?? 2);
+      if (!cleaned) return;
+      const gen = ++speakGenRef.current;
+      try {
+        speechSynthesis.cancel();
+      } catch {
+        /* noop */
+      }
+      const u = new SpeechSynthesisUtterance(cleaned);
+      const voices = speechSynthesis.getVoices();
+      const v =
+        voices.find((x) => /Samantha|Alex|Victoria|Karen|Daniel/i.test(x.name))
+        || voices.find((x) => x.lang?.toLowerCase().startsWith("en"));
+      if (v) u.voice = v;
+      u.rate = 1.02;
+      const cap = cleaned.length > 220 ? `${cleaned.slice(0, 217)}…` : cleaned;
+      u.onstart = () => {
+        if (speakGenRef.current !== gen) return;
+        void window.exec.publishVoiceCaption({ assistant: cap });
+        void window.exec.workspaceSpeaking(true);
+      };
+      u.onend = () => {
+        if (speakGenRef.current !== gen) return;
+        void window.exec.publishVoiceCaption({ assistant: null });
+        void window.exec.workspaceSpeaking(false);
+      };
+      u.onerror = () => {
+        if (speakGenRef.current !== gen) return;
+        void window.exec.publishVoiceCaption({ assistant: null });
+        void window.exec.workspaceSpeaking(false);
+      };
+      speechSynthesis.speak(u);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[exec] speakAloud failed", err);
+      void window.exec.workspaceSpeaking(false);
+    }
   }
 
   // ---- run streaming ----
@@ -193,15 +253,20 @@ export default function WorkspacePanel({
       setRunId(null);
       runIdRef.current = null;
       if (runKind === "openclaw") {
+        const voiceCtx = openclawVoiceContextRef.current;
+        openclawVoiceContextRef.current = null;
         if (code === 125 && finishedCmd) {
           endActivity({ tone: "err", text: "OpenClaw blocked" });
           say(error || "OpenClaw run was blocked.", "warn");
+          speakAloud(buildOpenClawSpeakable(code, finishedOutput, voiceCtx?.speakable));
         } else if (code !== 0 && finishedCmd) {
           endActivity({ tone: "err", text: "OpenClaw error" });
           say("OpenClaw exited with an error — full output is in the terminal.", "warn");
+          speakAloud(buildOpenClawSpeakable(code, finishedOutput, voiceCtx?.speakable));
         } else if (code === 0 && finishedCmd) {
           endActivity({ tone: "ok", text: "OpenClaw completed" });
           say("OpenClaw finished — scroll the terminal for the agent reply.", "success");
+          speakAloud(buildOpenClawSpeakable(code, finishedOutput, voiceCtx?.speakable));
         } else {
           endActivity();
         }
@@ -267,6 +332,7 @@ export default function WorkspacePanel({
         setFailure(s.failure || null);
         setDiffSummary(s.diffSummary || null);
         setBubbles(Array.isArray(s.bubbles) ? s.bubbles : []);
+        setMessages(Array.isArray(s.messages) ? s.messages : []);
         setResultKind(s.plan ? "plan" : s.failure ? "failure" : s.diffSummary ? "diff" : "idle");
         if (s.repoPath) {
           await activateWithRepo(s.repoPath);
@@ -291,45 +357,58 @@ export default function WorkspacePanel({
   const saveTimerRef = useRef<number | null>(null);
   const lastTitleRef = useRef<string>("");
   useEffect(() => {
-    if (!active) return;
+    // Persist whenever there's content — even without an active repo so
+    // general Ask conversations get saved.
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(async () => {
       saveTimerRef.current = null;
-      let id = activeSessionId;
-      const titleFromTask = (task.trim().split(/\n/)[0] || "").slice(0, 80) || "New chat";
-      if (!id) {
-        // Don't create empty sessions — wait until there's actual content.
-        const hasContent = task.trim() || plan || failure || diffSummary || bubbles.length;
-        if (!hasContent) return;
-        const seed = await window.exec.newSession({
-          title: titleFromTask,
-          repoPath: repoPath || undefined,
-          repoName: repo?.ok ? repo.name : undefined,
-        });
-        id = seed.id;
-        loadedSessionRef.current = id;
-        onSessionChange?.(id);
+      try {
+        let id = activeSessionId;
+        // Title priority: typed task → first user message in the thread → fallback.
+        const firstUserMsg = messages.find((m) => m.role === "user")?.text || "";
+        const titleSource = task.trim() || firstUserMsg.trim();
+        const titleFromTask = (titleSource.split(/\n/)[0] || "").slice(0, 80) || "New chat";
+        if (!id) {
+          const hasContent = task.trim() || plan || failure || diffSummary || bubbles.length || messages.length;
+          if (!hasContent) return;
+          const seed = await window.exec.newSession({
+            title: titleFromTask,
+            repoPath: repoPath || undefined,
+            repoName: repo?.ok ? repo.name : undefined,
+          });
+          const newId = seed?.id as string | undefined;
+          if (!newId) return;
+          id = newId;
+          loadedSessionRef.current = newId;
+          onSessionChange?.(newId);
+        }
+        const title = titleFromTask !== lastTitleRef.current ? titleFromTask : undefined;
+        if (title) lastTitleRef.current = title;
+        // Round-trip through JSON to strip any non-serializable values (defensive).
+        const safe = JSON.parse(JSON.stringify({
+          id,
+          title: title || undefined,
+          task,
+          plan,
+          failure,
+          diffSummary,
+          bubbles: bubbles.slice(-60),
+          messages: messages.slice(-100),
+          repoPath: repoPath || null,
+          repoName: repo?.ok ? repo.name : null,
+        }));
+        await window.exec.saveSession(safe);
+      } catch (err) {
+        // Never let a save error blow up the workspace.
+        // eslint-disable-next-line no-console
+        console.error("[exec] saveSession failed", err);
       }
-      // Update the title if the task line changed.
-      const title = titleFromTask !== lastTitleRef.current ? titleFromTask : undefined;
-      if (title) lastTitleRef.current = title;
-      await window.exec.saveSession({
-        id,
-        title: title || undefined,
-        task,
-        plan,
-        failure,
-        diffSummary,
-        bubbles: bubbles.slice(-60),
-        repoPath: repoPath || null,
-        repoName: repo?.ok ? repo.name : null,
-      });
     }, 600);
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task, plan, failure, diffSummary, bubbles, active, repoPath]);
+  }, [task, plan, failure, diffSummary, bubbles, messages, active, repoPath]);
 
   // ---- pill bus ----
   const taskRef = useRef(task);
@@ -340,15 +419,12 @@ export default function WorkspacePanel({
   // live repo (auto-activate runs on mount via getLastRepo).
   useEffect(() => {
     if (!pendingVoiceQuestion) return;
-    if (!repo?.ok) return; // wait for activation
-    const text = pendingVoiceQuestion;
+    const { text } = pendingVoiceQuestion;
     onConsumeVoiceQuestion?.();
-    setTask(text);
-    taskRef.current = text;
-    say(`You asked: "${text}". Thinking…`);
-    runPlan(text);
+    if (!text || !text.trim()) return;
+    runAsk(text);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingVoiceQuestion, repo]);
+  }, [pendingVoiceQuestion?.epoch]);
 
   useEffect(() => {
     const offT = window.exec.onPillTranscript((text) => {
@@ -361,7 +437,10 @@ export default function WorkspacePanel({
       if (!prompt) { say("No Cursor prompt yet — Plan a task or run a check first.", "warn"); return; }
       sendToCursor(prompt);
     });
-    return () => { offT(); offC(); };
+    const offI = window.exec.onPillInterruptSpeech(() => {
+      stopAssistantSpeech();
+    });
+    return () => { offT(); offC(); offI(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -381,6 +460,7 @@ export default function WorkspacePanel({
   async function changeRepo() {
     const p = await window.exec.pickRepo();
     if (!p) return;
+    await window.exec.rememberRepo(p);
     setStarting(true);
     try { await activateWithRepo(p); } finally { setStarting(false); }
   }
@@ -407,6 +487,231 @@ export default function WorkspacePanel({
     if (ctx.ok) say("Rescanned repo.");
   }
 
+  useEffect(() => {
+    if (!savedRepoEpoch) return;
+    void (async () => {
+      const p = await window.exec.getLastRepo();
+      if (!p || !activeRef.current) return;
+      setStarting(true);
+      try {
+        await activateWithRepo(p);
+      } finally {
+        setStarting(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch bump only; active read via ref
+  }, [savedRepoEpoch]);
+
+  function isAffirmative(s: string) {
+    return /^(yes|yeah|yep|yup|sure|ok(?:ay)?|go ahead|do it|please do|create it|sounds good|let'?s do it|confirmed?|that works|yes please)\b/i.test(s.trim());
+  }
+  function isNegative(s: string) {
+    return /^(no|nope|cancel|don'?t|stop|never mind|abort|skip)\b/i.test(s.trim());
+  }
+
+  /** Human-readable path for Cursor handoff (CLI vs open, AppleScript vs clipboard). */
+  function describeCursorHandoff(r: {
+    ok: boolean;
+    reason?: string;
+    message?: string;
+    openedRepoVia?: string;
+    pastedVia?: string;
+    automationFailed?: boolean;
+    pasteShortcut?: string;
+  }): string {
+    if (!r.ok) {
+      if (r.reason === "accessibility") {
+        return "Need Accessibility permission for Exec (Electron) in System Settings. Prompt is on your clipboard.";
+      }
+      return r.message || `Cursor handoff failed${r.reason ? ` (${r.reason})` : ""}. Prompt is on your clipboard.`;
+    }
+    const bits: string[] = [];
+    if (r.openedRepoVia === "cursor-cli") bits.push("Opened the repo with the Cursor CLI");
+    else if (r.openedRepoVia === "open-app") bits.push("Opened Cursor via macOS open");
+    else bits.push("Could not launch Cursor automatically from here");
+    if (r.pastedVia === "applescript") {
+      bits.push(r.pasteShortcut ? `pasted using ${r.pasteShortcut}` : "pasted using keyboard automation");
+    } else {
+      bits.push("prompt is on the clipboard — focus Cursor Agent or Chat, then ⌘V");
+    }
+    let s = `${bits.join(". ")}.`;
+    if (r.automationFailed && r.message) s += ` ${r.message}`;
+    return s;
+  }
+
+  // ---- general Ask (screen-aware, repo-optional) ----
+  async function runAsk(question: string) {
+    const q = (question || "").trim();
+    if (!q) return;
+
+    // If an action is pending, intercept yes/no first.
+    if (pendingActionRef.current) {
+      if (isAffirmative(q)) {
+        const action = pendingActionRef.current;
+        pendingActionRef.current = null;
+        setMessages((prev) => [...prev, { role: "user", text: q, ts: Date.now() }, { role: "assistant", text: "On it.", ts: Date.now() }]);
+        speakAloud("On it.", { maxSentences: 1 });
+        if (action.type === "create-project") await runCreateProjectAction(action);
+        else if (action.type === "scan-repo") await runScanRepoAction();
+        else if (action.type === "send-to-cursor") {
+          const prompt = planRef.current?.cursorPrompt || failureRef.current?.cursorPrompt;
+          if (prompt) await sendToCursor(prompt);
+          else say("No Cursor prompt yet — Plan a task or run a check first.", "warn");
+        }
+        return;
+      }
+      if (isNegative(q)) {
+        pendingActionRef.current = null;
+        setMessages((prev) => [...prev, { role: "user", text: q, ts: Date.now() }, { role: "assistant", text: "Okay, I'll skip it.", ts: Date.now() }]);
+        speakAloud("Okay, I'll skip it.", { maxSentences: 1 });
+        return;
+      }
+      // Otherwise: keep the pending action but fall through to a normal ask.
+    }
+
+    setMessages((prev) => [...prev, { role: "user", text: q, ts: Date.now() }]);
+    setAskPending(true);
+    beginActivity("plan", "Asking Exec…");
+    try {
+      const settings = await window.exec.getSettings();
+      cursorAutoSendRef.current = settings.cursorAutoSend !== false;
+      const screenshotBase64 = getScreenshot?.() || null;
+      if (typeof window.exec.publishVmaxResponse === "function") {
+        void window.exec.publishVmaxResponse({ phase: "loading", question: q });
+      }
+      if (typeof window.exec.setOverlayExpanded === "function") {
+        void window.exec.setOverlayExpanded(true);
+      }
+      const res = await window.exec.ask({
+        question: q,
+        screenshotBase64,
+        repo: repo?.ok ? repo : undefined,
+        history: messagesRef.current.slice(-6),
+      });
+      const { prose, action } = parseActionTag(res.text);
+      setMessages((prev) => [...prev, { role: "assistant", text: prose, ts: Date.now() }]);
+      endActivity({ tone: "ok", text: "Answered" });
+      if (typeof window.exec.publishVmaxResponse === "function") {
+        void window.exec.publishVmaxResponse({
+          phase: "ready",
+          question: q,
+          panel: res.structured,
+          parseWarning: res.parseWarning,
+        });
+      }
+      speakAloud(deriveSpeakable(res.structured.speakableSummary, res.text));
+      if (action) {
+        const autoSend =
+          cursorAutoSendRef.current
+          && repo?.ok
+          && (action.type === "scan-repo" || action.type === "send-to-cursor");
+        if (autoSend) {
+          if (action.type === "send-to-cursor") {
+            const prompt = planRef.current?.cursorPrompt || failureRef.current?.cursorPrompt;
+            if (!prompt) say("No Cursor prompt yet — plan a task or run a check first.", "warn");
+            else await sendToCursor(prompt);
+          } else {
+            await runScanRepoAction();
+          }
+        } else {
+          pendingActionRef.current = action;
+          setMicArmToken((t) => t + 1);
+        }
+      }
+    } catch (err) {
+      endActivity({ tone: "err", text: "Ask failed" });
+      const msg = `Ask failed: ${(err as Error).message}`;
+      setMessages((prev) => [...prev, { role: "assistant", text: msg, ts: Date.now() }]);
+      say(msg, "warn");
+      if (typeof window.exec.publishVmaxResponse === "function") {
+        void window.exec.publishVmaxResponse({ phase: "error", message: msg });
+      }
+    } finally {
+      setAskPending(false);
+    }
+  }
+
+  async function runScanRepoAction() {
+    if (!repo?.ok || !repoPath) {
+      const msg = "Need an active repo to scan. Start Exec on a repo first.";
+      setMessages((prev) => [...prev, { role: "assistant", text: msg, ts: Date.now() }]);
+      speakAloud(proseToSpeakable(msg));
+      return;
+    }
+    beginActivity("diff", "Scanning repo for issues…");
+    try {
+      const diff = await getDiffText();
+      const summary = await window.exec.summarizeDiff({ diff });
+      // Compose a one-line voice answer from the structured summary.
+      const headline = summary.summary || "Scan complete.";
+      const risks = (summary.risks || []).slice(0, 3).map((r) => `• ${r}`).join("\n");
+      const reply = risks ? `${headline}\nRisks I'd watch:\n${risks}` : headline;
+      setDiffSummary(summary);
+      setResultKind("diff");
+      setMessages((prev) => [...prev, { role: "assistant", text: reply, ts: Date.now() }]);
+      endActivity({ tone: "ok", text: "Scan done" });
+      speakAloud(
+        deriveSpeakable(
+          summary.speakableSummary,
+          headline + (summary.risks?.length ? `. ${summary.risks.length} risk${summary.risks.length === 1 ? "" : "s"} flagged.` : ""),
+        ),
+      );
+    } catch (err) {
+      endActivity({ tone: "err", text: "Scan failed" });
+      const msg = `Scan failed: ${(err as Error).message}`;
+      setMessages((prev) => [...prev, { role: "assistant", text: msg, ts: Date.now() }]);
+      say(msg, "warn");
+    }
+  }
+
+  async function runCreateProjectAction(action: { name?: string; prompt?: string }) {
+    const name = (action.name || "").trim() || "new-project";
+    const prompt = (action.prompt || "").trim();
+    beginActivity("run", `Creating project ${name}…`);
+    say(`Creating project '${name}' on Desktop…`);
+    try {
+      const r = await window.exec.createProject({ name });
+      if (!r.ok) throw new Error("createProject failed");
+      say(`Created ${r.path}. Opening Cursor and pasting the prompt…`, "success");
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", text: `✓ Created project at ${r.path}.`, ts: Date.now() },
+      ]);
+      endActivity({ tone: "ok", text: `Created ${r.name}` });
+      // Remember the new repo so Workspace activates with it.
+      await window.exec.rememberRepo(r.path);
+      // Immediately drive Cursor's Composer with the prompt.
+      if (prompt) {
+        const sent = await window.exec.sendToCursorChat({ repoPath: r.path, prompt });
+        say(describeCursorHandoff(sent), sent.ok && !sent.automationFailed ? "success" : "warn");
+      }
+    } catch (err) {
+      endActivity({ tone: "err", text: "Project creation failed" });
+      say(`Project creation failed: ${(err as Error).message}`, "warn");
+    }
+  }
+
+  function parseActionTag(text: string): {
+    prose: string;
+    action: { type: string; name?: string; prompt?: string } | null;
+  } {
+    if (!text) return { prose: "", action: null };
+    const m = text.match(/\[\[action\s+([a-z-]+)([^\]]*)\]\]/i);
+    if (!m) return { prose: text, action: null };
+    const type = m[1];
+    const attrs = m[2] || "";
+    // Pull name="..." and prompt="..."
+    const name = matchAttr(attrs, "name");
+    const prompt = matchAttr(attrs, "prompt");
+    const prose = text.replace(m[0], "").trim();
+    return { prose, action: { type, name, prompt } };
+  }
+  function matchAttr(s: string, key: string): string | undefined {
+    const m = s.match(new RegExp(`${key}="((?:[^"\\\\]|\\\\.)*)"`, "i"));
+    if (!m) return undefined;
+    return m[1].replace(/\\"/g, '"').replace(/\\n/g, "\n").replace(/\\\\/g, "\\");
+  }
+
   // ---- AI ----
   async function getDiffText(): Promise<string> {
     if (!repoPath) return "";
@@ -421,7 +726,8 @@ export default function WorkspacePanel({
 
   async function runPlan(taskOverride?: string) {
     if (!repo?.ok) return;
-    const t = (taskOverride ?? taskRef.current ?? task).trim();
+    const overrideStr = typeof taskOverride === "string" ? taskOverride : undefined;
+    const t = (overrideStr ?? taskRef.current ?? task).trim();
     if (!t) { say("Add a task first — paste from Linear or describe what to build.", "warn"); return; }
     setResultKind("plan"); setResultLoading(true); setPlan(null);
     beginActivity("plan", "Planning the task…");
@@ -435,7 +741,7 @@ export default function WorkspacePanel({
       setPlan(result);
       endActivity({ tone: "ok", text: "Plan ready" });
       say("Plan ready. Cursor prompt is queued.", "success");
-      speak(result.summary);
+      speakAloud(deriveSpeakable(result.speakableSummary, result.summary));
     } catch (err) {
       endActivity({ tone: "err", text: "Plan failed" });
       say(`Plan failed: ${(err as Error).message}`, "warn");
@@ -455,6 +761,7 @@ export default function WorkspacePanel({
       setDiffSummary(result);
       endActivity({ tone: "ok", text: "Diff summarized" });
       say("Diff summarized.", "success");
+      speakAloud(deriveSpeakable(result.speakableSummary, result.summary));
     } catch (err) {
       endActivity({ tone: "err", text: "Summarize failed" });
       say(`Summarize failed: ${(err as Error).message}`, "warn"); setResultKind("idle");
@@ -470,18 +777,19 @@ export default function WorkspacePanel({
       setFailure(result);
       endActivity({ tone: "ok", text: "Diagnosis ready" });
       say("I have a guess — see the explanation above.", "success");
-      speak(`${result.what}. ${result.cause}`);
+      speakAloud(deriveSpeakable(result.speakableSummary, `${result.what} ${result.cause}`));
 
       // Auto-loop continuation: if we're inside a Claude Code loop and we got
       // a fix prompt back, fire the next iteration. Stop once we hit max.
-      if (loopRef.current.active && result.cursorPrompt) {
+      const claudeHandoff = result.claudePrompt || result.cursorPrompt;
+      if (loopRef.current.active && claudeHandoff) {
         const next = loopRef.current.iter + 1;
         if (next > loopRef.current.max) {
           endLoop(`hit max iterations (${loopRef.current.max})`, "warn");
         } else {
           setLoop({ ...loopRef.current, iter: next });
           say(`Loop ${next}/${loopRef.current.max} — sending fix to Claude…`);
-          window.setTimeout(() => sendToClaudeCli(result.cursorPrompt), 350);
+          window.setTimeout(() => sendToClaudeCli(claudeHandoff), 350);
         }
       }
     } catch (err) {
@@ -519,6 +827,13 @@ export default function WorkspacePanel({
       say("Nothing to send to OpenClaw yet.", "warn");
       return;
     }
+    const speakableHint =
+      resultKind === "plan"
+        ? plan?.speakableSummary
+        : resultKind === "failure"
+          ? failure?.speakableSummary
+          : diffSummary?.speakableSummary;
+    openclawVoiceContextRef.current = { speakable: speakableHint };
     const id = newRunId();
     lastRunKindRef.current = "openclaw";
     runIdRef.current = id;
@@ -573,14 +888,15 @@ export default function WorkspacePanel({
   // Run the generated prompt with Claude Code CLI inside the active repo.
   // Reuses startCommand's runId / streaming / activity wiring so the terminal
   // panel and ActivityBar light up automatically — UI never freezes.
-  function sendToClaudeCli(prompt: string) {
-    if (!repoPath) { say("No active repo for Claude Code CLI.", "warn"); return; }
+  async function sendToClaudeCli(prompt: string) {
+    if (!repoPath) {
+      say("No active repo for Claude Code CLI.", "warn");
+      return;
+    }
     if (runIdRef.current) {
       say("Wait for the current run to finish before starting Claude Code.", "warn");
       return;
     }
-    // Arm the auto-loop on the first hand-off if the plan came with a verify
-    // command. Subsequent iterations re-use the same loop state.
     if (!loopRef.current.active) {
       const verify = planRef.current?.command?.trim() || null;
       if (verify) {
@@ -599,26 +915,103 @@ export default function WorkspacePanel({
     setLines((prev) => [...prev, { stream: "meta", text: `\n$ claude -p <prompt> (in ${repo?.ok ? repo.name : "repo"})\n` }]);
     beginActivity("run", "Running Claude Code…");
     say("Sent prompt to Claude Code CLI. Streaming output below.");
-    window.exec.runClaudeCli({ runId: id, repoPath, prompt }).catch((err) => {
+    try {
+      const res = await window.exec.runClaudeCli({ runId: id, repoPath, prompt });
+      if (!res.started) {
+        setRunId(null);
+        runIdRef.current = null;
+        setRunCommand(null);
+        endActivity({ tone: "err", text: "Claude Code didn't start" });
+        say(res.error || "Claude Code CLI is not available — see the message in the terminal.", "warn");
+        endLoop("Claude CLI failed to start", "warn");
+      }
+    } catch (err) {
+      setRunId(null);
+      runIdRef.current = null;
+      setRunCommand(null);
+      endActivity({ tone: "err", text: "Claude Code didn't start" });
       say(`Claude Code failed to start: ${(err as Error).message}`, "warn");
-    });
-  }
-  async function sendToCursor(prompt: string) {
-    if (!repoPath) { await window.exec.copy(prompt); return; }
-    beginActivity("cursor", "Handoff to Cursor (Claude Code)…");
-    say("Opening Cursor and sending prompt…");
-    const r = await window.exec.sendToCursorChat({ repoPath, prompt });
-    if (r.ok) {
-      endActivity({ tone: "ok", text: "Sent to Cursor" });
-      say("Sent to Cursor's chat.", "success");
-    } else if (r.reason === "accessibility") {
-      endActivity({ tone: "err", text: "Cursor blocked: Accessibility" });
-      say("Need Accessibility permission to drive Cursor. Grant in System Settings → Privacy → Accessibility, then quit and run again. Prompt is on your clipboard.", "warn");
-    } else {
-      endActivity({ tone: "err", text: "Cursor handoff failed" });
-      say(`Couldn't auto-send (${r.reason || "unknown"}). Prompt is on your clipboard.`, "warn");
+      endLoop("Claude CLI failed to start", "warn");
     }
   }
+  async function sendToCursor(prompt: string) {
+    if (!repoPath) {
+      await window.exec.copy(prompt);
+      say("No active repo — copied the prompt. Paste it into Cursor.", "warn");
+      return;
+    }
+    beginActivity("cursor", "Handoff to Cursor…");
+    say("Opening Cursor and sending prompt…");
+    const r = await window.exec.sendToCursorChat({ repoPath, prompt });
+    const line = describeCursorHandoff(r);
+    if (r.ok) {
+      endActivity({ tone: "ok", text: "Sent to Cursor" });
+      say(line, r.automationFailed ? "warn" : "success");
+    } else if (r.reason === "accessibility") {
+      endActivity({ tone: "err", text: "Cursor blocked: Accessibility" });
+      say(line, "warn");
+    } else {
+      endActivity({ tone: "err", text: "Cursor handoff failed" });
+      say(line, "warn");
+    }
+  }
+
+  function startOpenClawWithMessage(message: string) {
+    if (!repoPath || !repo?.ok) {
+      say("Start Exec on a repo before running OpenClaw.", "warn");
+      return;
+    }
+    if (runIdRef.current) {
+      say("Wait for the current run to finish.", "warn");
+      return;
+    }
+    const msg = message.trim();
+    if (!msg) return;
+    openclawVoiceContextRef.current = null;
+    const id = newRunId();
+    lastRunKindRef.current = "openclaw";
+    runIdRef.current = id;
+    runCommandRef.current = "openclaw agent";
+    lastRunOutputRef.current = "";
+    setRunId(id);
+    setRunCommand("openclaw agent");
+    setExitCode(null);
+    setLines((prev) => [
+      ...prev,
+      { stream: "meta", text: `\n$ openclaw agent (prompt ${msg.length} chars — output below)\n` },
+    ]);
+    beginActivity("openclaw", "OpenClaw agent running…");
+    say("Sending to OpenClaw…", "info");
+    void window.exec.openclawAgent({ runId: id, repoPath, message: msg });
+  }
+
+  const vmaxExecRef = useRef<((action: VmaxPanelAction) => void) | null>(null);
+  vmaxExecRef.current = (action: VmaxPanelAction) => {
+    void window.exec.focusCommandCenter();
+    if (action.type === "send-cursor") void sendToCursor(action.prompt);
+    else if (action.type === "run-claude") void sendToClaudeCli(action.prompt);
+    else if (action.type === "run-command") startCommand(action.command);
+    else if (action.type === "openclaw") {
+      const message = buildOpenClawFromAskPanel({
+        question: action.question,
+        repo,
+        panel: action.panel,
+      });
+      if (message) startOpenClawWithMessage(message);
+      else say("Could not build OpenClaw message.", "warn");
+    }
+  };
+
+  const registerExecutorRef = useRef(registerVmaxPanelExecutor);
+  registerExecutorRef.current = registerVmaxPanelExecutor;
+
+  useEffect(() => {
+    const reg = registerExecutorRef.current;
+    if (!reg) return undefined;
+    const dispatch = (action: VmaxPanelAction) => vmaxExecRef.current?.(action);
+    reg(dispatch);
+    return () => reg(null);
+  }, []);
 
   return (
     <div className="max-w-[820px] mx-auto px-6 pt-6 pb-12 space-y-3">
@@ -651,7 +1044,7 @@ export default function WorkspacePanel({
                 });
                 // clear local state for the new chat
                 setTask(""); setPlan(null); setFailure(null); setDiffSummary(null);
-                setBubbles([]); setResultKind("idle"); setLines([]);
+                setBubbles([]); setMessages([]); setResultKind("idle"); setLines([]);
                 lastTitleRef.current = "";
                 loadedSessionRef.current = s.id;
                 onSessionChange?.(s.id);
@@ -666,48 +1059,61 @@ export default function WorkspacePanel({
               className="h-9 px-3 rounded-lg text-[12px] text-white/75 hover:text-white
                          bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08]"
             >
-              Change repo
+              Select Repo
             </button>
           </div>
         )}
       </div>
 
+      {/* Repo strip + activity bar only matter when a repo is active */}
+      {active && (
+        <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-3">
+          <RepoStrip repo={repo} onRescan={rescan} />
+        </div>
+      )}
+
+      <ActivityBar activity={activity} resultFlash={lastResultStatus} />
+
+      {loopUI.active && (
+        <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/[0.06] px-3 py-1.5 flex items-center gap-2">
+          <span className="relative flex">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            <span className="absolute inset-0 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping opacity-60" />
+          </span>
+          <span className="text-[12px] text-emerald-100/95 tracking-tight">
+            Auto-loop active — iteration {loopUI.iter + 1} of {loopUI.max}, verify <code className="mono text-emerald-300/95">{loopUI.verify}</code>
+          </span>
+          <button
+            onClick={() => endLoop("stopped by user", "info")}
+            className="ml-auto text-[10.5px] px-2 h-[22px] rounded-md bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-white/85"
+          >
+            Stop loop
+          </button>
+        </div>
+      )}
+
+      {/* Ask anything — always available, repo or not. */}
+      <TaskPanel
+        task={task}
+        onTaskChange={setTask}
+        onSend={() => {
+          const q = task.trim();
+          if (!q) return;
+          setTask("");
+          runAsk(q);
+        }}
+        onTranscribed={() => say("Got it — I heard you.")}
+        onVoiceError={(m) => say(m, "warn")}
+        sending={askPending || resultLoading}
+        disabled={false}
+        micArmToken={micArmToken}
+      />
+
+      <MessageThread messages={messages} pending={askPending} />
+
+      {/* Repo-aware tooling — only shown when there's a live repo. */}
       {active && (
         <>
-          <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-3">
-            <RepoStrip repo={repo} onRescan={rescan} />
-          </div>
-
-          <ActivityBar activity={activity} resultFlash={lastResultStatus} />
-
-          {loopUI.active && (
-            <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/[0.06] px-3 py-1.5 flex items-center gap-2">
-              <span className="relative flex">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                <span className="absolute inset-0 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping opacity-60" />
-              </span>
-              <span className="text-[12px] text-emerald-100/95 tracking-tight">
-                Auto-loop active — iteration {loopUI.iter + 1} of {loopUI.max}, verify <code className="mono text-emerald-300/95">{loopUI.verify}</code>
-              </span>
-              <button
-                onClick={() => endLoop("stopped by user", "info")}
-                className="ml-auto text-[10.5px] px-2 h-[22px] rounded-md bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-white/85"
-              >
-                Stop loop
-              </button>
-            </div>
-          )}
-
-          <TaskPanel
-            task={task}
-            onTaskChange={setTask}
-            onSend={runPlan}
-            onTranscribed={() => say("Got it — I heard you.")}
-            onVoiceError={(m) => say(m, "warn")}
-            sending={resultLoading}
-            disabled={!active}
-          />
-
           <CommandCards cards={cards} />
 
           {resultKind !== "idle" && (
@@ -740,11 +1146,8 @@ export default function WorkspacePanel({
       )}
 
       {!active && (
-        <div className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5">
-          <div className="text-[13px] text-white/65 leading-relaxed">
-            Hit <span className="text-white font-medium">Start Exec</span> to load the active repo. The pill
-            on your screen gives you quick voice / screen / Cursor controls — everything else lives here.
-          </div>
+        <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] px-3 py-2 text-[11.5px] text-white/55">
+          You can ask anything above. <span className="text-white">Start Exec</span> on a repo to unlock plan / typecheck / diff / Cursor handoff.
         </div>
       )}
     </div>

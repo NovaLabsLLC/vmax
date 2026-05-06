@@ -7,15 +7,27 @@ contextBridge.exposeInMainWorld("exec", {
   focusCommandCenter: () => ipcRenderer.invoke("exec:focus-command-center"),
 
   // pill → workspace bus
+  pillInterruptSpeech: () => ipcRenderer.invoke("pill:interrupt-speech"),
   pillTranscript: (text) => ipcRenderer.invoke("pill:transcript", text),
   pillVoiceQuestion: (text) => ipcRenderer.invoke("pill:voice-question", text),
   pillRequestCursor: () => ipcRenderer.invoke("pill:request-cursor"),
   pillToggleScreen: () => ipcRenderer.invoke("pill:toggle-screen"),
   workspaceStatus: (status) => ipcRenderer.invoke("workspace:status", status),
+  workspaceSpeaking: (speaking) => ipcRenderer.invoke("workspace:speaking", !!speaking),
+  onWorkspaceSpeaking: (cb) => {
+    const h = (_e, speaking) => cb(speaking);
+    ipcRenderer.on("workspace:speaking", h);
+    return () => ipcRenderer.removeListener("workspace:speaking", h);
+  },
   onPillTranscript: (cb) => {
     const h = (_e, text) => cb(text);
     ipcRenderer.on("pill:transcript", h);
     return () => ipcRenderer.removeListener("pill:transcript", h);
+  },
+  onPillInterruptSpeech: (cb) => {
+    const h = () => cb();
+    ipcRenderer.on("pill:interrupt-speech", h);
+    return () => ipcRenderer.removeListener("pill:interrupt-speech", h);
   },
   onPillVoiceQuestion: (cb) => {
     const h = (_e, text) => cb(text);
@@ -48,6 +60,19 @@ contextBridge.exposeInMainWorld("exec", {
     ipcRenderer.on("voice:caption", h);
     return () => ipcRenderer.removeListener("voice:caption", h);
   },
+  publishVmaxResponse: (p) => ipcRenderer.invoke("exec:publish-vmax-response", p),
+  onVmaxResponse: (cb) => {
+    const h = (_e, p) => cb(p || {});
+    ipcRenderer.on("vmax:response", h);
+    return () => ipcRenderer.removeListener("vmax:response", h);
+  },
+  setOverlayExpanded: (expanded) => ipcRenderer.invoke("overlay:set-expanded", { expanded: !!expanded }),
+  vmaxPanelAction: (p) => ipcRenderer.invoke("exec:vmax-panel-action", p),
+  onVmaxPanelAction: (cb) => {
+    const h = (_e, p) => cb(p || {});
+    ipcRenderer.on("vmax-panel:action", h);
+    return () => ipcRenderer.removeListener("vmax-panel:action", h);
+  },
   onCaptionDirection: (cb) => {
     const h = (_e, dir) => cb(dir);
     ipcRenderer.on("overlay:caption-direction", h);
@@ -60,11 +85,21 @@ contextBridge.exposeInMainWorld("exec", {
   saveProfile: (p) => ipcRenderer.invoke("exec:save-profile", p),
   getSettings: () => ipcRenderer.invoke("exec:get-settings"),
   saveSettings: (s) => ipcRenderer.invoke("exec:save-settings", s),
+  onSettingsUpdated: (cb) => {
+    const h = (_e, settings) => cb(settings || {});
+    ipcRenderer.on("exec:settings-updated", h);
+    return () => ipcRenderer.removeListener("exec:settings-updated", h);
+  },
   listSessions: () => ipcRenderer.invoke("sessions:list"),
   getSession: (id) => ipcRenderer.invoke("sessions:get", id),
   saveSession: (s) => ipcRenderer.invoke("sessions:save", s),
   deleteSession: (id) => ipcRenderer.invoke("sessions:delete", id),
   newSession: (seed) => ipcRenderer.invoke("sessions:new", seed || {}),
+  onSessionsUpdated: (cb) => {
+    const h = () => cb();
+    ipcRenderer.on("sessions:updated", h);
+    return () => ipcRenderer.removeListener("sessions:updated", h);
+  },
 
   isOnboarded: () => ipcRenderer.invoke("exec:is-onboarded"),
   finishOnboarding: () => ipcRenderer.invoke("exec:onboarding-done"),
@@ -92,6 +127,8 @@ contextBridge.exposeInMainWorld("exec", {
 
   transcribe: (payload) => ipcRenderer.invoke("ai:transcribe", payload),
   tts: (payload) => ipcRenderer.invoke("ai:tts", payload),
+  ask: (payload) => ipcRenderer.invoke("ai:ask", payload),
+  createProject: (payload) => ipcRenderer.invoke("exec:create-project", payload || {}),
   plan: (payload) => ipcRenderer.invoke("ai:plan", payload),
   explainFailure: (payload) => ipcRenderer.invoke("ai:explain-failure", payload),
   summarizeDiff: (payload) => ipcRenderer.invoke("ai:summarize-diff", payload),

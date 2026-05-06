@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useAudio } from "../hooks/useAudio";
 
 const HOLD_MS = 420; /* press longer than this = push-to-hold (release stops) */
@@ -11,6 +11,7 @@ type Props = {
   onVoiceError?: (message: string) => void;
   sending?: boolean;
   disabled?: boolean;
+  micArmToken?: number;
 };
 
 export default function TaskPanel({
@@ -21,6 +22,7 @@ export default function TaskPanel({
   onVoiceError,
   sending,
   disabled,
+  micArmToken = 0,
 }: Props) {
   const audio = useAudio();
   const transcribingRef = useRef(false);
@@ -54,6 +56,18 @@ export default function TaskPanel({
       onVoiceError?.(msg);
     }
   }
+
+  /** After the assistant asks for confirmation, start listening so you can say "yes" hands-free. */
+  useEffect(() => {
+    if (!micArmToken) return;
+    const timer = window.setTimeout(() => {
+      if (disabled || sending || transcribingRef.current) return;
+      void startMicSafe();
+    }, 450);
+    return () => window.clearTimeout(timer);
+    // startMicSafe is intentionally excluded — token bump is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [micArmToken, disabled, sending]);
 
   function handlePointerDown(e: React.PointerEvent<HTMLButtonElement>) {
     if (disabled || transcribingRef.current || sending) return;
@@ -205,7 +219,7 @@ export default function TaskPanel({
 
       <button
         type="button"
-        onClick={onSend}
+        onClick={() => onSend()}
         disabled={!canSend}
         title="Plan Task (⌘ Enter)"
         className={`absolute right-2.5 bottom-2.5 h-8 w-8 rounded-full flex items-center justify-center

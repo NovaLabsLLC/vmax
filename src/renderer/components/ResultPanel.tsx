@@ -77,19 +77,41 @@ function Loading({ kind }: { kind: Props["kind"] }) {
   );
 }
 
+function ParseWarningBanner() {
+  return (
+    <div className="rounded-lg border border-amber-400/35 bg-amber-500/[0.08] px-3 py-2 text-[12px] text-amber-100/95 leading-snug">
+      The model returned a malformed or incomplete response. Showing a safe fallback — double-check before acting.
+    </div>
+  );
+}
+
 function PlanView({
   plan,
   onCopyCursorPrompt,
   onSendToCursor,
+  onSendToClaudeCli,
   onRunCommand,
   onOpenClaw,
   openClawDisabled,
 }: { plan: Plan } & Props) {
   return (
     <div className="space-y-3">
+      {plan.parseWarning && <ParseWarningBanner />}
       <Section label="Plan">
         <p className="text-[13px] text-white/85 leading-relaxed">{plan.summary}</p>
       </Section>
+
+      {plan.whatVmaxSees?.trim() ? (
+        <Section label="What Vmax sees">
+          <p className="text-[12.5px] text-white/75 leading-relaxed whitespace-pre-wrap">{plan.whatVmaxSees.trim()}</p>
+        </Section>
+      ) : null}
+
+      {plan.executionRecommendation && plan.executionRecommendation !== "none" ? (
+        <Section label="Execution">
+          <p className="text-[12px] text-white/70 capitalize">{plan.executionRecommendation.replace(/_/g, " ")}</p>
+        </Section>
+      ) : null}
 
       {plan.files?.length > 0 && (
         <Section label={`Likely files (${plan.files.length})`}>
@@ -131,6 +153,7 @@ function PlanView({
       {plan.cursorPrompt && (
         <CursorBlock
           prompt={plan.cursorPrompt}
+          claudePrompt={plan.claudePrompt}
           onCopy={onCopyCursorPrompt}
           onSend={onSendToCursor}
           onSendClaude={onSendToClaudeCli}
@@ -147,11 +170,13 @@ function FailureView({
   onCopyCursorPrompt,
   onSendToCursor,
   onSendToClaudeCli,
+  onRunCommand,
   onOpenClaw,
   openClawDisabled,
 }: { failure: FailureExplanation } & Props) {
   return (
     <div className="space-y-3">
+      {failure.parseWarning && <ParseWarningBanner />}
       <Section label="What happened">
         <p className="text-[13px] text-white/90 leading-relaxed">{failure.what}</p>
       </Section>
@@ -170,9 +195,40 @@ function FailureView({
           </ul>
         </Section>
       )}
+      {failure.whatVmaxSees?.trim() ? (
+        <Section label="What Vmax sees">
+          <p className="text-[12.5px] text-white/75 leading-relaxed whitespace-pre-wrap">{failure.whatVmaxSees.trim()}</p>
+        </Section>
+      ) : null}
+      {failure.executionRecommendation && failure.executionRecommendation !== "none" ? (
+        <Section label="Execution">
+          <p className="text-[12px] text-white/70 capitalize">{failure.executionRecommendation.replace(/_/g, " ")}</p>
+        </Section>
+      ) : null}
+      {failure.suggestedCommands && failure.suggestedCommands.length > 0 && (
+        <Section label="Suggested commands">
+          <ul className="space-y-2">
+            {failure.suggestedCommands.map((cmd, i) => (
+              <li key={i} className="flex items-center gap-2 flex-wrap">
+                <code className="mono text-[12px] bg-black/40 border border-white/10 rounded px-2 py-1 text-white/85">{cmd}</code>
+                {onRunCommand && (
+                  <button
+                    type="button"
+                    onClick={() => onRunCommand(cmd)}
+                    className="text-[11px] px-2 py-1 rounded bg-white/10 hover:bg-white/15 text-white"
+                  >
+                    Run
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
       {failure.cursorPrompt && (
         <CursorBlock
           prompt={failure.cursorPrompt}
+          claudePrompt={failure.claudePrompt}
           onCopy={onCopyCursorPrompt}
           onSend={onSendToCursor}
           onSendClaude={onSendToClaudeCli}
@@ -186,14 +242,23 @@ function FailureView({
 
 function DiffView({
   diff,
+  onCopyCursorPrompt,
+  onSendToCursor,
+  onSendToClaudeCli,
   onOpenClaw,
   openClawDisabled,
 }: { diff: DiffSummary } & Props) {
   return (
     <div className="space-y-3">
+      {diff.parseWarning && <ParseWarningBanner />}
       <Section label="Summary">
         <p className="text-[13px] text-white/85 leading-relaxed">{diff.summary}</p>
       </Section>
+      {diff.whatVmaxSees?.trim() ? (
+        <Section label="What Vmax sees">
+          <p className="text-[12.5px] text-white/75 leading-relaxed whitespace-pre-wrap">{diff.whatVmaxSees.trim()}</p>
+        </Section>
+      ) : null}
       {diff.files?.length > 0 && (
         <Section label={`Files (${diff.files.length})`}>
           <ul className="space-y-1">
@@ -220,6 +285,20 @@ function DiffView({
           </ul>
         </Section>
       )}
+      {diff.executionRecommendation && diff.executionRecommendation !== "none" ? (
+        <Section label="Execution">
+          <p className="text-[12px] text-white/70 capitalize">{diff.executionRecommendation.replace(/_/g, " ")}</p>
+        </Section>
+      ) : null}
+      {diff.cursorPrompt ? (
+        <CursorBlock
+          prompt={diff.cursorPrompt}
+          claudePrompt={diff.claudePrompt}
+          onCopy={onCopyCursorPrompt}
+          onSend={onSendToCursor}
+          onSendClaude={onSendToClaudeCli}
+        />
+      ) : null}
 
       <OpenClawRow onRun={onOpenClaw} disabled={openClawDisabled} />
     </div>
@@ -266,11 +345,14 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 
 function CursorBlock({
   prompt,
+  claudePrompt,
   onCopy,
   onSend,
   onSendClaude,
 }: {
   prompt: string;
+  /** When set, “Send to Claude Code” uses this instead of `prompt`. */
+  claudePrompt?: string;
   onCopy?: (prompt: string) => void;
   onSend?: (prompt: string) => void;
   onSendClaude?: (prompt: string) => void;
@@ -297,7 +379,7 @@ function CursorBlock({
           )}
           {onSendClaude && (
             <button
-              onClick={() => onSendClaude(prompt)}
+              onClick={() => onSendClaude((claudePrompt && claudePrompt.trim()) || prompt)}
               title="Run with Claude Code CLI inside the repo"
               className="text-[10.5px] px-2.5 h-[22px] rounded-md bg-amber-500/15 hover:bg-amber-500/25
                          border border-amber-400/30 hover:border-amber-400/50 text-amber-100 transition-all

@@ -114,7 +114,57 @@ export function useVoiceCapture() {
     cancelRef.current = true;
   }
 
-  return { state, level, start, cancel };
+  // Lightweight always-on VAD: opens the mic but does NOT record. Calls
+  // onSpeech() the first time speech is detected. Used to barge-in over TTS.
+  // Caller is responsible for calling stop().
+  async function watchForSpeech(onSpeech: () => void, opts?: { threshold?: number; minMs?: number }): Promise<() => void> {
+    const threshold = opts?.threshold ?? 0.05;
+    const minMs = opts?.minMs ?? 220;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.fftSize);
+    let raf = 0;
+    let speakingSince: number | null = null;
+    let stopped = false;
+    let fired = false;
+
+    const tick = () => {
+      if (stopped) return;
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = (data[i] - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / data.length);
+      const now = performance.now();
+      if (rms > threshold) {
+        if (speakingSince === null) speakingSince = now;
+        else if (!fired && now - speakingSince >= minMs) {
+          fired = true;
+          try { onSpeech(); } catch { /* ignore */ }
+          return; // caller calls stop()
+        }
+      } else {
+        speakingSince = null;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+
+    return () => {
+      stopped = true;
+      if (raf) cancelAnimationFrame(raf);
+      stream.getTracks().forEach((t) => t.stop());
+      audioCtx.close().catch(() => {});
+    };
+  }
+
+  return { state, level, start, cancel, watchForSpeech };
 }
 
 function bufToBase64(buf: ArrayBuffer): string {
