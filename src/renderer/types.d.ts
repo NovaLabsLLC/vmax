@@ -150,6 +150,13 @@ declare global {
         pasteShortcut?: string;
       }>;
 
+      cliStatus: () => Promise<{
+        claude: { installed: boolean; version?: string; authed?: boolean; authVia?: "env" | "file" };
+        codex: { installed: boolean; version?: string; authed?: boolean; authVia?: "env" | "file" };
+      }>;
+      cliOpenLogin: (tool: "claude" | "codex") => Promise<{ ok: boolean; error?: string }>;
+      cliOpenInstall: (tool: "claude" | "codex") => Promise<{ ok: boolean; error?: string }>;
+
       run: (p: { runId: string; repoPath: string; command: string }) => Promise<{ started: boolean; blocked?: boolean; reason?: string }>;
       openclawAgent: (p: { runId: string; repoPath: string; message: string }) => Promise<{ started: boolean; error?: string }>;
       runClaudeCli: (p: { runId: string; repoPath: string; prompt: string }) => Promise<{ started: boolean; error?: string }>;

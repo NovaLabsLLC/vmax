@@ -117,6 +117,10 @@ contextBridge.exposeInMainWorld("exec", {
   copy: (text) => ipcRenderer.invoke("exec:copy", text),
   sendToCursorChat: (payload) => ipcRenderer.invoke("exec:send-to-cursor-chat", payload),
 
+  cliStatus: () => ipcRenderer.invoke("cli:status"),
+  cliOpenLogin: (tool) => ipcRenderer.invoke("cli:open-login", { tool }),
+  cliOpenInstall: (tool) => ipcRenderer.invoke("cli:open-install", { tool }),
+
   run: (payload) => ipcRenderer.invoke("exec:run", payload),
   openclawAgent: (payload) => ipcRenderer.invoke("exec:openclaw-agent", payload),
   runClaudeCli: (payload) => ipcRenderer.invoke("exec:run-claude-cli", payload),
