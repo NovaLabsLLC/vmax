@@ -4,7 +4,12 @@ contextBridge.exposeInMainWorld("exec", {
   setInteractive: (on) => ipcRenderer.invoke("window:set-interactive", !!on),
   openOverlay: () => ipcRenderer.invoke("exec:open-overlay"),
   closeOverlay: () => ipcRenderer.invoke("exec:close-overlay"),
-  focusCommandCenter: () => ipcRenderer.invoke("exec:focus-command-center"),
+  focusCommandCenter: (opts) => ipcRenderer.invoke("exec:focus-command-center", opts || null),
+  onCcNavigate: (cb) => {
+    const h = (_e, p) => cb(p || {});
+    ipcRenderer.on("cc:navigate", h);
+    return () => ipcRenderer.removeListener("cc:navigate", h);
+  },
 
   // pill → workspace bus
   pillInterruptSpeech: () => ipcRenderer.invoke("pill:interrupt-speech"),
@@ -115,6 +120,13 @@ contextBridge.exposeInMainWorld("exec", {
   run: (payload) => ipcRenderer.invoke("exec:run", payload),
   openclawAgent: (payload) => ipcRenderer.invoke("exec:openclaw-agent", payload),
   runClaudeCli: (payload) => ipcRenderer.invoke("exec:run-claude-cli", payload),
+  runCodexCli: (payload) => ipcRenderer.invoke("exec:run-codex-cli", payload),
+  dispatch: (payload) => ipcRenderer.invoke("exec:dispatch", payload),
+  onAgentsStatus: (cb) => {
+    const h = (_e, p) => cb(p || {});
+    ipcRenderer.on("agents:status", h);
+    return () => ipcRenderer.removeListener("agents:status", h);
+  },
   cancelRun: (runId) => ipcRenderer.invoke("exec:run:cancel", runId),
   onRunData: (cb) => {
     const handler = (_evt, payload) => cb(payload);

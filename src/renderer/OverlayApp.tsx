@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useVoiceCapture } from "./hooks/useVoiceCapture";
 import { subscribeSettingsUpdated } from "./utils/subscribeSettingsUpdated";
 import VmaxExpandedPanel from "./components/VmaxExpandedPanel";
-import type { VmaxOverlayBroadcast, VmaxPanelPayload } from "./types";
+import type { AgentStatusEvent, ExecAgent, VmaxOverlayBroadcast, VmaxPanelPayload } from "./types";
 
 // Floating bar + expandable Vmax response (macOS vibrancy glass).
 export default function OverlayApp() {
@@ -22,6 +22,24 @@ export default function OverlayApp() {
 
   /** Window is tall enough to show the response surface */
   const [surfaceExpanded, setSurfaceExpanded] = useState(false);
+
+  // Backend-only routing — the bar doesn't show which agent ran. We still
+  // listen for agents:status so we can surface dispatch errors inline (and
+  // toggle the pill's busy shimmer while a dispatch is in flight).
+  const [dispatchBusy, setDispatchBusy] = useState(false);
+  const [dispatchError, setDispatchError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window.exec.onAgentsStatus !== "function") return;
+    return window.exec.onAgentsStatus((evt: AgentStatusEvent) => {
+      if (evt.state === "running") { setDispatchBusy(true); setDispatchError(null); }
+      if (evt.state === "done") setDispatchBusy(false);
+      if (evt.state === "error") {
+        setDispatchBusy(false);
+        if (evt.error) setDispatchError(evt.error);
+      }
+    });
+  }, []);
 
   // Wrapper around the response body. We measure its rendered height each phase
   // change and push it to the main process so the overlay window hugs whatever
@@ -130,11 +148,21 @@ export default function OverlayApp() {
     try {
       const { text } = await window.exec.transcribe(result);
       const clean = (text || "").trim();
-      if (clean) await window.exec.pillVoiceQuestion(clean);
+      if (!clean) return;
+      // Direct route: Exec picks the best coding agent and fires it.
+      // Status chips update via onAgentsStatus.
+      if (typeof window.exec.dispatch === "function") {
+        const res = await window.exec.dispatch({ prompt: clean });
+        if (!res?.ok && res?.error) setDispatchError(res.error);
+      } else {
+        await window.exec.pillVoiceQuestion(clean);
+      }
     } catch (err) {
       console.error("voice failed", err);
+      setDispatchError(String((err as Error)?.message || err));
     }
   }
+
   async function toggleScreen() {
     await window.exec.pillToggleScreen();
   }
@@ -143,6 +171,9 @@ export default function OverlayApp() {
   }
   async function focusCC() {
     await window.exec.focusCommandCenter();
+  }
+  async function openSettings() {
+    await window.exec.focusCommandCenter({ view: "settings" });
   }
 
   async function toggleTalkBack() {
@@ -183,7 +214,7 @@ export default function OverlayApp() {
   }
 
   const busy =
-    voice.state === "finalizing" || voice.state === "listening" || !!status.busy;
+    voice.state === "finalizing" || voice.state === "listening" || !!status.busy || dispatchBusy;
 
   const dotTone =
     voice.state === "listening"
@@ -242,14 +273,6 @@ export default function OverlayApp() {
           <ScreenIcon recording={screenOn} />
         </PillButton>
 
-        <PillButton
-          title="Send latest plan to Cursor"
-          onClick={fireCursor}
-          state="idle"
-          activeBg="bg-white text-black"
-        >
-          <CursorIcon />
-        </PillButton>
 
         <PillButton
           title={talkBack ? "Talk Back on — short spoken summaries after AI or OpenClaw" : "Talk Back off"}
@@ -258,6 +281,26 @@ export default function OverlayApp() {
           activeBg="bg-cyan-500/88 text-white shadow-[0_0_22px_-3px_rgba(34,211,238,0.85)]"
         >
           <SpeakerIcon on={talkBack} />
+        </PillButton>
+
+        <div className="flex-1 min-w-2" />
+
+        <PillButton
+          title="Set API keys"
+          onClick={() => void openSettings()}
+          state="idle"
+          activeBg="bg-white text-black"
+        >
+          <GearIcon />
+        </PillButton>
+
+        <PillButton
+          title="Open Command Center"
+          onClick={() => void focusCC()}
+          state="idle"
+          activeBg="bg-white text-black"
+        >
+          <ExpandIcon />
         </PillButton>
 
         {canReopenPanel ? (
@@ -291,6 +334,12 @@ export default function OverlayApp() {
           </>
         ) : null}
       </div>
+
+      {dispatchError && !showVmaxBody ? (
+        <div className="no-drag px-4 pb-2 -mt-1 text-[10.5px] text-rose-200/85 truncate">
+          {dispatchError}
+        </div>
+      ) : null}
 
       {showVmaxBody ? (
         <div ref={bodyRef} className="no-drag flex flex-col px-2 pb-2 pt-0">
@@ -412,6 +461,25 @@ function CursorIcon() {
     <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
       <line x1="5" y1="12" x2="19" y2="12" />
       <polyline points="13 6 19 12 13 18" />
+    </svg>
+  );
+}
+
+function ExpandIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M9 9h6v6" />
+      <line x1="15" y1="9" x2="9" y2="15" />
+    </svg>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3 1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8 1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
     </svg>
   );
 }

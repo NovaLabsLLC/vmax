@@ -4,9 +4,17 @@ type Settings = {
   cursorAutoSend: boolean;
   defaultProvider: "auto" | "openai" | "claude";
   talkBack: boolean;
+  openaiApiKey: string;
+  anthropicApiKey: string;
 };
 
-const DEFAULT: Settings = { cursorAutoSend: true, defaultProvider: "auto", talkBack: true };
+const DEFAULT: Settings = {
+  cursorAutoSend: true,
+  defaultProvider: "auto",
+  talkBack: true,
+  openaiApiKey: "",
+  anthropicApiKey: "",
+};
 
 export default function SettingsPanel() {
   const [s, setS] = useState<Settings>(DEFAULT);
@@ -19,6 +27,8 @@ export default function SettingsPanel() {
         cursorAutoSend: cur.cursorAutoSend !== false,
         defaultProvider: cur.defaultProvider || "auto",
         talkBack: cur.talkBack !== false,
+        openaiApiKey: cur.openaiApiKey || "",
+        anthropicApiKey: cur.anthropicApiKey || "",
       });
     })();
   }, []);
@@ -34,7 +44,31 @@ export default function SettingsPanel() {
       <div>
         <div className="text-[18px] font-semibold tracking-tight">Settings</div>
         <div className="text-[12.5px] text-white/50 mt-0.5">
-          API keys are configured in the project's .env file — not here.
+          Drop your keys in here. Stored locally in your Exec user data, never sent anywhere except the model provider.
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-5 space-y-5">
+        <div className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">API keys</div>
+
+        <KeyInput
+          label="OpenAI API key"
+          placeholder="sk-…"
+          hint="Used for Whisper (voice), TTS, and OpenAI text models."
+          value={s.openaiApiKey}
+          onChange={(v) => setS({ ...s, openaiApiKey: v })}
+        />
+
+        <KeyInput
+          label="Anthropic API key"
+          placeholder="sk-ant-…"
+          hint="Used for Claude models when you pick Claude or Auto."
+          value={s.anthropicApiKey}
+          onChange={(v) => setS({ ...s, anthropicApiKey: v })}
+        />
+
+        <div className="text-[10.5px] text-white/35 leading-snug">
+          Tip: the Claude Code CLI and Codex CLI use their own auth (run <code className="text-white/55">claude login</code> / <code className="text-white/55">codex login</code> in a terminal once). The keys above are only for in-app AI calls.
         </div>
       </div>
 
@@ -93,6 +127,46 @@ function Label({ text, sub }: { text: string; sub?: string }) {
     <div className="flex items-baseline gap-2 mb-1">
       <div className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">{text}</div>
       {sub && <div className="text-[10.5px] text-white/30">{sub}</div>}
+    </div>
+  );
+}
+
+function KeyInput({
+  label,
+  placeholder,
+  hint,
+  value,
+  onChange,
+}: {
+  label: string;
+  placeholder: string;
+  hint?: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [reveal, setReveal] = useState(false);
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-1">
+        <div className="text-[12px] text-white/85">{label}</div>
+        <button
+          type="button"
+          onClick={() => setReveal((x) => !x)}
+          className="text-[10.5px] text-white/45 hover:text-white/80"
+        >
+          {reveal ? "hide" : "show"}
+        </button>
+      </div>
+      <input
+        type={reveal ? "text" : "password"}
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        spellCheck={false}
+        autoComplete="off"
+        className="w-full h-9 px-3 rounded-lg bg-black/40 border border-white/[0.10] text-[12.5px] text-white placeholder:text-white/30 focus:outline-none focus:border-white/30 font-mono"
+      />
+      {hint && <div className="text-[10.5px] text-white/35 mt-1 leading-snug">{hint}</div>}
     </div>
   );
 }

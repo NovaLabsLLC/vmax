@@ -129,6 +129,16 @@ export default function CommandCenter() {
   }
 
   useEffect(() => {
+    if (typeof window.exec.onCcNavigate !== "function") return;
+    return window.exec.onCcNavigate((p) => {
+      const v = p?.view as View | undefined;
+      if (v && ["home", "workspace", "chats", "profile", "settings", "help"].includes(v)) {
+        setView(v);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
     const off = window.exec.onPillVoiceQuestion((text) => {
       setView("workspace");
       // Wrap in an epoch so the consumer effect fires even when the same

@@ -73,6 +73,18 @@ export type VmaxPanelAction =
   | { type: "openclaw"; question: string; panel: VmaxPanelPayload }
   | { type: "run-command"; command: string };
 
+export type ExecAgent = "claude" | "codex" | "cursor";
+export type AgentRunState = "idle" | "running" | "done" | "error";
+export type AgentStatusEvent = {
+  agent: ExecAgent;
+  state: AgentRunState;
+  runId: string;
+  prompt?: string;
+  reason?: string;
+  code?: number;
+  error?: string;
+};
+
 export type VmaxOverlayBroadcast =
   | { phase: "loading"; question?: string }
   | { phase: "ready"; question: string; panel: VmaxPanelPayload; parseWarning?: boolean }
@@ -84,7 +96,8 @@ declare global {
       setInteractive: (on: boolean) => Promise<void>;
       openOverlay: () => Promise<void>;
       closeOverlay: () => Promise<void>;
-      focusCommandCenter: () => Promise<void>;
+      focusCommandCenter: (opts?: { view?: "home" | "workspace" | "chats" | "profile" | "settings" | "help" }) => Promise<void>;
+      onCcNavigate: (cb: (p: { view?: string }) => void) => () => void;
 
       pillInterruptSpeech: () => Promise<void>;
       pillTranscript: (text: string) => Promise<void>;
@@ -140,6 +153,9 @@ declare global {
       run: (p: { runId: string; repoPath: string; command: string }) => Promise<{ started: boolean; blocked?: boolean; reason?: string }>;
       openclawAgent: (p: { runId: string; repoPath: string; message: string }) => Promise<{ started: boolean; error?: string }>;
       runClaudeCli: (p: { runId: string; repoPath: string; prompt: string }) => Promise<{ started: boolean; error?: string }>;
+      runCodexCli: (p: { runId: string; repoPath: string; prompt: string }) => Promise<{ started: boolean; error?: string }>;
+      dispatch: (p: { prompt: string; agent?: ExecAgent }) => Promise<{ ok: boolean; agent?: ExecAgent; reason?: string; runId?: string; error?: string }>;
+      onAgentsStatus: (cb: (p: AgentStatusEvent) => void) => () => void;
       cancelRun: (runId: string) => Promise<boolean>;
       onRunData: (cb: (e: { runId: string; stream: "stdout" | "stderr"; chunk: string }) => void) => () => void;
       onRunEnd: (cb: (e: { runId: string; code: number; error?: string }) => void) => () => void;
