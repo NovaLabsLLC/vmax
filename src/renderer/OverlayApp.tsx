@@ -235,9 +235,9 @@ export default function OverlayApp() {
       className={`h-full flex flex-col overflow-hidden select-none
                   ${busy ? "shimmer-sweep" : ""}`}
     >
-      <div className="shrink-0 flex w-full items-center px-2 gap-2 overflow-hidden min-h-[64px]">
+      <div className="shrink-0 flex w-full items-center px-1.5 gap-1.5 overflow-hidden min-h-[56px]">
         <div
-          className="drag h-10 px-2 flex items-center cursor-grab active:cursor-grabbing
+          className="drag h-9 px-1.5 flex items-center cursor-grab active:cursor-grabbing
                      hover:bg-white/[0.08] rounded-full transition-colors"
           title="Drag to move"
         >
@@ -247,43 +247,30 @@ export default function OverlayApp() {
         <button
           onClick={focusCC}
           title="Open Command Center"
-          className="no-drag flex items-center gap-2 pl-1 pr-2 h-10 rounded-full hover:bg-white/[0.08] transition-colors"
+          className="no-drag flex items-center gap-1.5 pl-1 pr-1.5 h-9 rounded-full hover:bg-white/[0.08] transition-colors shrink-0"
         >
           <span className={`w-2 h-2 rounded-full ${dotTone}`} />
-          <span className="text-[12.5px] font-semibold tracking-tight text-white drop-shadow">Exec</span>
+          <span className="text-[12px] font-semibold tracking-tight text-white drop-shadow">Exec</span>
         </button>
 
         <Divider />
 
-        <PillButton
+
+        <button
           title={voice.state === "listening" ? "Listening… (click to cancel)" : "Ask a voice question"}
           onClick={handleVoice}
-          state={voice.state === "listening" ? "active" : voice.state === "finalizing" ? "busy" : "idle"}
-          activeBg="bg-emerald-500/85 text-white shadow-[0_0_22px_-3px_rgba(52,211,153,0.95)]"
+          className={`no-drag h-9 w-9 rounded-full flex items-center justify-center transition-all active:scale-[0.94] shrink-0 ${
+            voice.state === "listening"
+              ? "bg-emerald-500/90 text-white shadow-[0_0_22px_-3px_rgba(52,211,153,0.95)]"
+              : voice.state === "finalizing"
+                ? "bg-amber-400/30 text-amber-100 animate-pulse border border-amber-400/40"
+                : "bg-sky-500/85 text-white hover:bg-sky-500 shadow-[0_0_18px_-4px_rgba(56,189,248,0.85)]"
+          }`}
         >
           <MicIcon level={voice.level} listening={voice.state === "listening"} />
-        </PillButton>
+        </button>
 
-        <PillButton
-          title={screenOn ? "Stop screen sharing" : "Share your screen"}
-          onClick={toggleScreen}
-          state={screenOn ? "active" : "idle"}
-          activeBg="bg-rose-500/85 text-white shadow-[0_0_22px_-3px_rgba(244,63,94,0.95)]"
-        >
-          <ScreenIcon recording={screenOn} />
-        </PillButton>
-
-
-        <PillButton
-          title={talkBack ? "Talk Back on — short spoken summaries after AI or OpenClaw" : "Talk Back off"}
-          onClick={() => void toggleTalkBack()}
-          state={talkBack ? "active" : "idle"}
-          activeBg="bg-cyan-500/88 text-white shadow-[0_0_22px_-3px_rgba(34,211,238,0.85)]"
-        >
-          <SpeakerIcon on={talkBack} />
-        </PillButton>
-
-        <div className="flex-1 min-w-2" />
+        <Divider />
 
         <PillButton
           title="Set API keys"
@@ -308,7 +295,7 @@ export default function OverlayApp() {
             type="button"
             title="Show last Vmax answer"
             onClick={() => void reopenResponseSurface()}
-            className="no-drag h-10 w-10 rounded-full flex items-center justify-center transition-all active:scale-[0.94]
+            className="no-drag h-9 w-9 rounded-full flex items-center justify-center transition-all active:scale-[0.94]
                        bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/35 text-emerald-100"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -404,12 +391,12 @@ function PillButton({
       ? activeBg
       : state === "busy"
         ? "bg-amber-400/15 text-amber-100 animate-pulse border border-amber-400/30"
-        : "bg-white/[0.08] text-white/85 hover:text-white hover:bg-white/[0.14] border border-white/[0.10]";
+        : "bg-white/[0.16] text-white/95 hover:text-white hover:bg-white/[0.24] border border-white/[0.22]";
   return (
     <button
       title={title}
       onClick={onClick}
-      className={`no-drag h-10 w-10 rounded-full flex items-center justify-center transition-all active:scale-[0.94] ${cls}`}
+      className={`no-drag h-9 w-9 rounded-full flex items-center justify-center transition-all active:scale-[0.94] ${cls}`}
     >
       {children}
     </button>

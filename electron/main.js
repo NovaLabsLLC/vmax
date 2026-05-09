@@ -107,8 +107,8 @@ function createCommandWindow({ visible = true } = {}) {
 }
 
 // ---- Overlay window ----
-const PILL_WIDTH = 600;
-const PILL_HEIGHT = 64;
+const PILL_WIDTH = 240;
+const PILL_HEIGHT = 56;
 /** Max overlay window height. Renderer measures actual content and asks for
  *  the exact height it needs via `overlay:set-content-height`; this is just
  *  the upper safety bound so a runaway response can't push the window off
