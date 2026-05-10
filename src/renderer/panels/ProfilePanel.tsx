@@ -5,9 +5,21 @@ type Profile = { name?: string; email?: string; role?: string };
 export default function ProfilePanel({ onSaved }: { onSaved?: (p: Profile) => void }) {
   const [profile, setProfile] = useState<Profile>({});
   const [saved, setSaved] = useState(false);
+  const [linearOn, setLinearOn] = useState(false);
 
   useEffect(() => {
     (async () => setProfile((await window.exec.getProfile()) || {}))();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const g = await window.exec.getSettings();
+      setLinearOn(!!g.linearApiKey?.trim());
+    })();
+    const off = window.exec.onSettingsUpdated((sett) => {
+      if (typeof sett.linearApiKey === "string") setLinearOn(!!sett.linearApiKey.trim());
+    });
+    return () => off();
   }, []);
 
   async function save() {
@@ -57,10 +69,10 @@ export default function ProfilePanel({ onSaved }: { onSaved?: (p: Profile) => vo
         </div>
       </div>
 
-      <Section title="Connected services" hint="Coming soon — placeholder list.">
-        <ServiceRow name="Linear" status="not connected" />
-        <ServiceRow name="GitHub" status="not connected" />
-        <ServiceRow name="Cursor" status="auto-detected via macOS" />
+      <Section title="Connected services" hint="Linear is wired from Settings → API keys.">
+        <ServiceRow name="Linear" status={linearOn ? "Personal API key saved" : "not connected"} connected={linearOn} />
+        <ServiceRow name="GitHub" status="not connected" connected={false} />
+        <ServiceRow name="Cursor" status="auto-detected via macOS" connected />
       </Section>
     </div>
   );
@@ -112,10 +124,11 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   );
 }
 
-function ServiceRow({ name, status }: { name: string; status: string }) {
+function ServiceRow({ name, status, connected = false }: { name: string; status: string; connected?: boolean }) {
+  const dot = connected ? "bg-emerald-400" : "bg-white/30";
   return (
     <div className="rounded-lg bg-white/[0.02] border border-white/[0.05] px-3 py-2 flex items-center gap-3">
-      <span className="w-1.5 h-1.5 rounded-full bg-white/30" />
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
       <span className="text-[12.5px] text-white/85">{name}</span>
       <span className="ml-auto text-[10.5px] text-white/40">{status}</span>
     </div>

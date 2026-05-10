@@ -18,7 +18,8 @@ body,
 body.view-overlay,
 body.view-overlay #root {
   background: transparent !important;
-  overflow: hidden;
+  overflow-x: visible;
+  overflow-y: hidden;
 }
 
 body.view-command,

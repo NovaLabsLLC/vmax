@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React from "react";
 import type { VmaxPanelPayload } from "../types";
 
 export type VmaxExpandedPanelProps = {
@@ -23,27 +23,9 @@ export default function VmaxExpandedPanel({
   onSendCursor,
 }: VmaxExpandedPanelProps) {
   const hasPrompt = !!panel.cursorPrompt?.trim() || !!panel.claudePrompt?.trim();
-  const rootRef = useRef<HTMLDivElement | null>(null);
-
-  // Auto-fit the overlay window height to actual content. The pill sits above
-  // this panel, so we publish (panel height + pill 64) as the desired window
-  // size; main clamps to safe bounds.
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el) return;
-    const push = () => {
-      const h = Math.ceil(el.getBoundingClientRect().height) + 64; // + pill row
-      window.exec.setOverlayContentHeight?.(h);
-    };
-    push();
-    const ro = new ResizeObserver(push);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [panel?.nextSteps]);
 
   return (
     <div
-      ref={rootRef}
       className="no-drag flex flex-col rounded-[16px] overflow-hidden
                  border border-white/[0.12] bg-black/[0.22] backdrop-blur-xl
                  shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_24px_48px_-16px_rgba(0,0,0,0.65)]"

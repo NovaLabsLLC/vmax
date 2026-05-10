@@ -35,7 +35,7 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
             <Card>
               <Hero />
               <p className="text-[13px] text-white/70 leading-relaxed mt-4">
-                Exec is a control layer for coding agents. It sees your repo and task, plans, runs checks,
+                Vmax is a control layer for coding agents. It sees your repo and task, plans, runs checks,
                 explains failures, and tells Cursor exactly what to do next.
               </p>
               <p className="text-[12.5px] text-white/45 leading-relaxed mt-2">
@@ -73,7 +73,7 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
                 <Bullet>
                   <strong className="text-white/85">Accessibility</strong>
                   <div className="text-white/55">
-                    Lets Exec drive Cursor's chat (open Composer, paste, send). macOS will prompt the first time
+                    Lets Vmax drive Cursor's chat (open Composer, paste, send). macOS will prompt the first time
                     you click <em>Send to Cursor</em>.
                   </div>
                 </Bullet>
@@ -93,7 +93,7 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
             <Card>
               <Heading title="Pick your active repo" sub="You can change it any time." />
               <p className="text-[12.5px] text-white/55 leading-relaxed mt-3">
-                Exec opens a folder picker. Choose a git repo to watch. We'll load its branch, changed files,
+                Vmax opens a folder picker. Choose a git repo to watch. We'll load its branch, changed files,
                 and diff into the Command Center.
               </p>
               <Footer
@@ -117,12 +117,9 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
 
 function Hero() {
   return (
-    <div className="flex items-center gap-3">
-      <div className="w-12 h-12 rounded-xl bg-white text-black flex items-center justify-center text-[18px] font-bold">E</div>
-      <div>
-        <div className="text-[20px] font-semibold tracking-tight">Welcome to Exec</div>
-        <div className="text-[12.5px] text-white/45">control layer for coding agents</div>
-      </div>
+    <div>
+      <div className="text-[20px] font-semibold tracking-tight">Welcome to Vmax</div>
+      <div className="text-[12.5px] text-white/45 mt-1">control layer for coding agents</div>
     </div>
   );
 }

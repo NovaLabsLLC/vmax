@@ -1,16 +1,37 @@
-import React, { useEffect, useRef, useState } from "react";
-import { useVoiceCapture } from "./hooks/useVoiceCapture";
-import { subscribeSettingsUpdated } from "./utils/subscribeSettingsUpdated";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import OverlayMiniChat from "./components/OverlayMiniChat";
 import VmaxExpandedPanel from "./components/VmaxExpandedPanel";
-import type { AgentStatusEvent, ExecAgent, VmaxOverlayBroadcast, VmaxPanelPayload } from "./types";
+import { useVoiceCapture } from "./hooks/useVoiceCapture";
+import { useScreen } from "./hooks/useScreen";
+import { subscribeSettingsUpdated } from "./utils/subscribeSettingsUpdated";
+import type { AgentStatusEvent, VmaxOverlayBroadcast, VmaxPanelPayload } from "./types";
+
+/** Resize the pill window; prefers `overlay:set-bounds`, falls back if main predates that handler. */
+async function syncOverlayShellBounds(width: number, height: number, animate: boolean): Promise<void> {
+  const api = window.exec;
+  if (typeof api.setOverlayBounds === "function") {
+    try {
+      await api.setOverlayBounds({ width, height, animate });
+      return;
+    } catch {
+      /* Stale Electron without ipc handler — use legacy IPC */
+    }
+  }
+  if (typeof api.setOverlayToolbarWidth === "function") {
+    void api.setOverlayToolbarWidth(width);
+  }
+  void api.setOverlayContentHeight?.(height);
+}
 
 // Floating bar + expandable Vmax response (macOS vibrancy glass).
 export default function OverlayApp() {
   const voice = useVoiceCapture();
+  const screen = useScreen();
   const [status, setStatus] = useState<{ active?: boolean; busy?: boolean; screen?: boolean }>({});
   const [talkBack, setTalkBack] = useState(true);
   const [speaking, setSpeaking] = useState(false);
-  const screenOn = !!status.screen;
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatPending, setChatPending] = useState(false);
 
   const [vmaxUi, setVmaxUi] = useState<{
     phase: "idle" | "loading" | "ready" | "error";
@@ -41,23 +62,6 @@ export default function OverlayApp() {
     });
   }, []);
 
-  // Wrapper around the response body. We measure its rendered height each phase
-  // change and push it to the main process so the overlay window hugs whatever
-  // content is currently visible — loading skeleton, error box, or full panel.
-  const bodyRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (!el || !surfaceExpanded) return;
-    const push = () => {
-      const h = Math.ceil(el.getBoundingClientRect().height) + 64; // + pill row
-      window.exec.setOverlayContentHeight?.(h);
-    };
-    push();
-    const ro = new ResizeObserver(push);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [surfaceExpanded, vmaxUi.phase, vmaxUi.panel]);
-
   useEffect(() => {
     const off = window.exec.onWorkspaceStatus((s) => setStatus((prev) => ({ ...prev, ...s })));
     return () => off();
@@ -72,6 +76,16 @@ export default function OverlayApp() {
       if (typeof sett.talkBack === "boolean") setTalkBack(sett.talkBack);
     });
   }, []);
+
+  useEffect(() => {
+    if (!chatOpen) {
+      screen.stop();
+      return;
+    }
+    void screen.start();
+    return () => screen.stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- useScreen methods are stable enough per mount
+  }, [chatOpen]);
 
   useEffect(() => {
     const off = window.exec.onWorkspaceSpeaking((s) => setSpeaking(!!s));
@@ -149,7 +163,7 @@ export default function OverlayApp() {
       const { text } = await window.exec.transcribe(result);
       const clean = (text || "").trim();
       if (!clean) return;
-      // Direct route: Exec picks the best coding agent and fires it.
+      // Direct route: Vmax picks the best coding agent and fires it.
       // Status chips update via onAgentsStatus.
       if (typeof window.exec.dispatch === "function") {
         const res = await window.exec.dispatch({ prompt: clean });
@@ -163,27 +177,11 @@ export default function OverlayApp() {
     }
   }
 
-  async function toggleScreen() {
-    await window.exec.pillToggleScreen();
-  }
-  async function fireCursor() {
-    await window.exec.pillRequestCursor();
-  }
   async function focusCC() {
     await window.exec.focusCommandCenter();
   }
   async function openSettings() {
     await window.exec.focusCommandCenter({ view: "settings" });
-  }
-
-  async function toggleTalkBack() {
-    const next = !talkBack;
-    setTalkBack(next);
-    try {
-      await window.exec.saveSettings({ talkBack: next });
-    } catch {
-      setTalkBack(!next);
-    }
   }
 
   async function stopSpeaking() {
@@ -214,7 +212,11 @@ export default function OverlayApp() {
   }
 
   const busy =
-    voice.state === "finalizing" || voice.state === "listening" || !!status.busy || dispatchBusy;
+    voice.state === "finalizing" ||
+    voice.state === "listening" ||
+    !!status.busy ||
+    dispatchBusy ||
+    chatPending;
 
   const dotTone =
     voice.state === "listening"
@@ -230,15 +232,52 @@ export default function OverlayApp() {
   const showVmaxBody = surfaceExpanded && (vmaxUi.phase === "loading" || vmaxUi.phase === "ready" || vmaxUi.phase === "error");
   const canReopenPanel = !surfaceExpanded && vmaxUi.phase === "ready" && vmaxUi.panel;
 
+  useEffect(() => {
+    if (showVmaxBody) void window.exec.setOverlayExpanded?.(true);
+    else void window.exec.setOverlayExpanded?.(false);
+  }, [showVmaxBody]);
+
+  /** Native window tracks shell height (toolbar + optional chat + Vmax body). */
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = shellRef.current;
+    if (!el) return;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const apply = () => {
+      const rect = el.getBoundingClientRect();
+      const w = Math.ceil(Math.max(rect.width, el.scrollWidth));
+      const h = Math.ceil(Math.max(rect.height, el.scrollHeight));
+      void syncOverlayShellBounds(w, h, false);
+    };
+    const ro = new ResizeObserver(() => {
+      if (t) clearTimeout(t);
+      t = setTimeout(apply, 40);
+    });
+    ro.observe(el);
+    apply();
+    const again = window.setTimeout(apply, 100);
+    return () => {
+      if (t) clearTimeout(t);
+      window.clearTimeout(again);
+      ro.disconnect();
+    };
+  }, []);
+
   return (
     <div
-      className={`h-full flex flex-col overflow-hidden select-none
+      className={`h-full flex flex-col overflow-x-visible overflow-y-hidden select-none
                   ${busy ? "shimmer-sweep" : ""}`}
     >
-      <div className="shrink-0 flex w-full items-center px-1.5 gap-1.5 overflow-hidden min-h-[56px]">
+      <div
+        ref={shellRef}
+        className="flex flex-col shrink-0 w-max min-h-0 min-w-0"
+      >
+      <div
+        className="shrink-0 flex flex-nowrap w-max box-border items-center gap-3 px-3 py-2 min-h-[56px]"
+      >
         <div
-          className="drag h-9 px-1.5 flex items-center cursor-grab active:cursor-grabbing
-                     hover:bg-white/[0.08] rounded-full transition-colors"
+          className="drag h-10 pl-1 pr-2 flex items-center cursor-grab active:cursor-grabbing
+                     hover:bg-white/[0.08] rounded-full transition-colors shrink-0"
           title="Drag to move"
         >
           <DragGrip />
@@ -247,10 +286,10 @@ export default function OverlayApp() {
         <button
           onClick={focusCC}
           title="Open Command Center"
-          className="no-drag flex items-center gap-1.5 pl-1 pr-1.5 h-9 rounded-full hover:bg-white/[0.08] transition-colors shrink-0"
+          className="no-drag flex items-center gap-2 pl-1.5 pr-2.5 h-10 rounded-full hover:bg-white/[0.08] transition-colors shrink-0"
         >
-          <span className={`w-2 h-2 rounded-full ${dotTone}`} />
-          <span className="text-[12px] font-semibold tracking-tight text-white drop-shadow">Exec</span>
+          <span className={`w-2 h-2 rounded-full shrink-0 ${dotTone}`} />
+          <span className="text-[12.5px] font-semibold tracking-tight text-white drop-shadow whitespace-nowrap">Vmax</span>
         </button>
 
         <Divider />
@@ -259,7 +298,7 @@ export default function OverlayApp() {
         <button
           title={voice.state === "listening" ? "Listening… (click to cancel)" : "Ask a voice question"}
           onClick={handleVoice}
-          className={`no-drag h-9 w-9 rounded-full flex items-center justify-center transition-all active:scale-[0.94] shrink-0 ${
+          className={`no-drag h-10 w-10 rounded-full flex items-center justify-center transition-all active:scale-[0.94] shrink-0 ${
             voice.state === "listening"
               ? "bg-emerald-500/90 text-white shadow-[0_0_22px_-3px_rgba(52,211,153,0.95)]"
               : voice.state === "finalizing"
@@ -271,6 +310,16 @@ export default function OverlayApp() {
         </button>
 
         <Divider />
+
+        <div className="flex items-center gap-2 shrink-0">
+        <PillButton
+          title={chatOpen ? "Hide chat" : "Text chat"}
+          onClick={() => setChatOpen((o) => !o)}
+          state={chatOpen ? "active" : "idle"}
+          activeBg="bg-violet-500/88 text-white shadow-[0_0_18px_-4px_rgba(139,92,246,0.85)]"
+        >
+          <ChatIcon />
+        </PillButton>
 
         <PillButton
           title="Set API keys"
@@ -289,13 +338,14 @@ export default function OverlayApp() {
         >
           <ExpandIcon />
         </PillButton>
+        </div>
 
         {canReopenPanel ? (
           <button
             type="button"
             title="Show last Vmax answer"
             onClick={() => void reopenResponseSurface()}
-            className="no-drag h-9 w-9 rounded-full flex items-center justify-center transition-all active:scale-[0.94]
+            className="no-drag h-10 w-10 rounded-full flex items-center justify-center transition-all active:scale-[0.94]
                        bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/35 text-emerald-100"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -306,14 +356,15 @@ export default function OverlayApp() {
 
         {speaking ? (
           <>
-            <span className="no-drag text-[10px] text-cyan-100/80 whitespace-nowrap font-medium tracking-tight animate-pulse">
+            <Divider />
+            <span className="no-drag text-[10.5px] text-cyan-100/80 whitespace-nowrap font-medium tracking-tight animate-pulse px-0.5">
               Speaking…
             </span>
             <button
               type="button"
               title="Stop speaking"
               onClick={() => void stopSpeaking()}
-              className="no-drag shrink-0 h-8 px-2.5 rounded-full text-[10.5px] font-medium
+              className="no-drag shrink-0 h-9 px-3 rounded-full text-[11px] font-medium
                          bg-white/14 hover:bg-white/22 border border-white/18 text-white/95"
             >
               Stop
@@ -322,55 +373,67 @@ export default function OverlayApp() {
         ) : null}
       </div>
 
-      {dispatchError && !showVmaxBody ? (
-        <div className="no-drag px-4 pb-2 -mt-1 text-[10.5px] text-rose-200/85 truncate">
-          {dispatchError}
-        </div>
-      ) : null}
+      <div className="flex flex-col min-h-0">
+        <OverlayMiniChat
+          talkBack={talkBack}
+          getScreenshot={() => screen.getLatestFrame()}
+          open={chatOpen}
+          onOpenChange={setChatOpen}
+          onPendingChange={setChatPending}
+        />
 
-      {showVmaxBody ? (
-        <div ref={bodyRef} className="no-drag flex flex-col px-2 pb-2 pt-0">
-          {vmaxUi.phase === "loading" ? (
-            <div className="rounded-[16px] border border-white/[0.1] bg-black/[0.2] p-3 space-y-2 animate-pulse">
-              <div className="h-3 rounded bg-white/[0.12] w-1/4" />
-              <div className="h-3 rounded bg-white/[0.06] w-3/4" />
-              <div className="h-3 rounded bg-white/[0.06] w-2/3" />
-              <div className="h-3 rounded bg-white/[0.06] w-1/2" />
-            </div>
-          ) : null}
+        {dispatchError && !showVmaxBody ? (
+          <div className="no-drag px-4 pb-2 -mt-1 text-[10.5px] text-rose-200/85 truncate">
+            {dispatchError}
+          </div>
+        ) : null}
 
-          {vmaxUi.phase === "error" ? (
-            <div className="rounded-xl border border-rose-400/30 bg-rose-500/[0.08] px-3 py-2 text-[12px] text-rose-100/90">
-              {vmaxUi.errorMsg || "Something went wrong."}
-            </div>
-          ) : null}
+        {showVmaxBody ? (
+          <div className="no-drag flex flex-col px-2 pb-2 pt-0">
+            {vmaxUi.phase === "loading" ? (
+              <div className="rounded-[16px] border border-white/[0.1] bg-black/[0.2] p-3 space-y-2 animate-pulse">
+                <div className="h-3 rounded bg-white/[0.12] w-1/4" />
+                <div className="h-3 rounded bg-white/[0.06] w-3/4" />
+                <div className="h-3 rounded bg-white/[0.06] w-2/3" />
+                <div className="h-3 rounded bg-white/[0.06] w-1/2" />
+              </div>
+            ) : null}
 
-          {vmaxUi.phase === "ready" && vmaxUi.panel ? (
-            <VmaxExpandedPanel
-              question={vmaxUi.question}
-              panel={vmaxUi.panel}
-              parseWarning={vmaxUi.parseWarning}
-              onCollapse={() => void collapseResponseSurface()}
-              onCopyCursor={() => void window.exec.copy(vmaxUi.panel!.cursorPrompt || "")}
-              onSendClaude={() => pushPanelAction({ type: "run-claude", prompt: vmaxUi.panel!.claudePrompt || vmaxUi.panel!.cursorPrompt })}
-              onSendCursor={() => pushPanelAction({ type: "send-cursor", prompt: vmaxUi.panel!.cursorPrompt || vmaxUi.panel!.claudePrompt || "" })}
-              onOpenClaw={() =>
-                pushPanelAction({
-                  type: "openclaw",
-                  question: vmaxUi.question,
-                  panel: vmaxUi.panel!,
-                })}
-              onRunSafeCommand={(cmd) => pushPanelAction({ type: "run-command", command: cmd })}
-            />
-          ) : null}
-        </div>
-      ) : null}
+            {vmaxUi.phase === "error" ? (
+              <div className="rounded-xl border border-rose-400/30 bg-rose-500/[0.08] px-3 py-2 text-[12px] text-rose-100/90">
+                {vmaxUi.errorMsg || "Something went wrong."}
+              </div>
+            ) : null}
+
+            {vmaxUi.phase === "ready" && vmaxUi.panel ? (
+              <VmaxExpandedPanel
+                question={vmaxUi.question}
+                panel={vmaxUi.panel}
+                parseWarning={vmaxUi.parseWarning}
+                onCollapse={() => void collapseResponseSurface()}
+                onCopyCursor={() => void window.exec.copy(vmaxUi.panel!.cursorPrompt || "")}
+                onSendClaude={() => pushPanelAction({ type: "run-claude", prompt: vmaxUi.panel!.claudePrompt || vmaxUi.panel!.cursorPrompt })}
+                onSendCursor={() => pushPanelAction({ type: "send-cursor", prompt: vmaxUi.panel!.cursorPrompt || vmaxUi.panel!.claudePrompt || "" })}
+                onOpenClaw={() =>
+                  pushPanelAction({
+                    type: "openclaw",
+                    question: vmaxUi.question,
+                    panel: vmaxUi.panel!,
+                  })}
+                onRunSafeCommand={(cmd) => pushPanelAction({ type: "run-command", command: cmd })}
+              />
+            ) : null}
+          </div>
+        ) : null}
+
+      </div>
+      </div>
     </div>
   );
 }
 
 function Divider() {
-  return <span className="w-px h-6 bg-white/15 mx-0.5" />;
+  return <span className="w-px h-7 bg-white/15 shrink-0 self-center" aria-hidden />;
 }
 
 function PillButton({
@@ -396,7 +459,7 @@ function PillButton({
     <button
       title={title}
       onClick={onClick}
-      className={`no-drag h-9 w-9 rounded-full flex items-center justify-center transition-all active:scale-[0.94] ${cls}`}
+      className={`no-drag h-10 w-10 rounded-full flex items-center justify-center transition-all active:scale-[0.94] ${cls}`}
     >
       {children}
     </button>
@@ -434,24 +497,6 @@ function MicIcon({ level, listening }: { level: number; listening: boolean }) {
     </div>
   );
 }
-function ScreenIcon({ recording }: { recording: boolean }) {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
-      <rect x="3" y="4" width="18" height="13" rx="2" />
-      <line x1="8" y1="21" x2="16" y2="21" />
-      {recording && <circle cx="12" cy="11" r="2.5" fill="currentColor" stroke="none" />}
-    </svg>
-  );
-}
-function CursorIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
-      <line x1="5" y1="12" x2="19" y2="12" />
-      <polyline points="13 6 19 12 13 18" />
-    </svg>
-  );
-}
-
 function ExpandIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
@@ -462,27 +507,19 @@ function ExpandIcon() {
   );
 }
 
+function ChatIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
+      <path d="M21 15a4 4 0 0 1-4 4H8l-5 3v-3H5a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4h12a4 4 0 0 1 4 4z" />
+    </svg>
+  );
+}
+
 function GearIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3 1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8 1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
-    </svg>
-  );
-}
-
-function SpeakerIcon({ on }: { on: boolean }) {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
-      <path d="M12 6 7 9H4v6h3l5 3V6Z" />
-      {on ? (
-        <>
-          <path d="M16 9a4 4 0 0 1 0 6" className="opacity-95" />
-          <path d="M17.5 7a7 7 0 0 1 0 10" className="opacity-70" />
-        </>
-      ) : (
-        <line x1="17" y1="7" x2="11" y2="17" />
-      )}
     </svg>
   );
 }

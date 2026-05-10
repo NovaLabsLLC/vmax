@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 type Settings = {
   openaiApiKey: string;
   anthropicApiKey: string;
+  linearApiKey: string;
 };
 
 type CliInfo = { installed: boolean; version?: string; authed?: boolean; authVia?: "env" | "file" };
@@ -11,6 +12,7 @@ type CliStatus = { claude: CliInfo; codex: CliInfo };
 const DEFAULT: Settings = {
   openaiApiKey: "",
   anthropicApiKey: "",
+  linearApiKey: "",
 };
 
 export default function SettingsPanel() {
@@ -18,6 +20,8 @@ export default function SettingsPanel() {
   const [saved, setSaved] = useState(false);
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [busy, setBusy] = useState<{ tool: "claude" | "codex"; kind: "login" | "install" } | null>(null);
+  const [linearBusy, setLinearBusy] = useState(false);
+  const [linearTest, setLinearTest] = useState<{ ok: boolean; msg: string } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -25,6 +29,7 @@ export default function SettingsPanel() {
       setS({
         openaiApiKey: cur.openaiApiKey || "",
         anthropicApiKey: cur.anthropicApiKey || "",
+        linearApiKey: cur.linearApiKey || "",
       });
     })();
     void refreshCli();
@@ -66,12 +71,30 @@ export default function SettingsPanel() {
     }
   }
 
+  async function testLinear() {
+    setLinearTest(null);
+    setLinearBusy(true);
+    try {
+      const r = await window.exec.linearVerify(s.linearApiKey);
+      if (r.ok) {
+        const who = [r.userName, r.email].filter(Boolean).join(" · ");
+        setLinearTest({ ok: true, msg: who || "API key is valid." });
+      } else {
+        setLinearTest({ ok: false, msg: r.error || "Could not reach Linear." });
+      }
+    } catch (err) {
+      setLinearTest({ ok: false, msg: String((err as Error)?.message || err) });
+    } finally {
+      setLinearBusy(false);
+    }
+  }
+
   return (
     <div className="max-w-[640px] mx-auto px-6 pt-6 pb-10 space-y-6">
       <div>
         <div className="text-[18px] font-semibold tracking-tight">Settings</div>
         <div className="text-[12.5px] text-white/50 mt-0.5">
-          Drop your keys in here. Stored locally in your Exec user data, never sent anywhere except the model provider.
+          Keys stay in your Vmax user data. AI keys go to OpenAI / Anthropic; the Linear key is only sent to Linear when you test it or when we fetch issues later.
         </div>
       </div>
 
@@ -93,6 +116,39 @@ export default function SettingsPanel() {
           value={s.anthropicApiKey}
           onChange={(v) => setS({ ...s, anthropicApiKey: v })}
         />
+
+        <KeyInput
+          label="Linear API key"
+          placeholder="lin_api_…"
+          hint="Used to verify your workspace and (soon) pull issue details. Create one under Linear → Settings → API → Personal API keys."
+          value={s.linearApiKey}
+          onChange={(v) => setS({ ...s, linearApiKey: v })}
+        />
+
+        <div className="flex flex-wrap items-center gap-2 pt-0.5">
+          <button
+            type="button"
+            className="h-8 px-3 rounded-lg text-[11.5px] font-medium bg-white/[0.08] hover:bg-white/[0.12] border border-white/[0.14] text-white/90"
+            onClick={() => void window.exec.openUrl("https://linear.app/settings/api")}
+          >
+            Open Linear API keys
+          </button>
+          <button
+            type="button"
+            disabled={linearBusy || !s.linearApiKey.trim()}
+            className="h-8 px-3 rounded-lg text-[11.5px] font-medium bg-white/[0.08] hover:bg-white/[0.12] border border-white/[0.14] text-white/90 disabled:opacity-45"
+            onClick={() => void testLinear()}
+          >
+            {linearBusy ? "Checking…" : "Test connection"}
+          </button>
+        </div>
+        {linearTest ? (
+          <div
+            className={`text-[11.5px] ${linearTest.ok ? "text-emerald-300/95" : "text-rose-300/90"}`}
+          >
+            {linearTest.msg}
+          </div>
+        ) : null}
 
         <div className="flex items-center gap-2 pt-1">
           <button
@@ -135,6 +191,17 @@ export default function SettingsPanel() {
 
         <div className="text-[10.5px] text-white/35 leading-snug">
           Hitting <span className="text-white/55">Log in</span> opens a Terminal window with the auth command pre-typed. Finish the OAuth flow there, then come back and hit <span className="text-white/55">re-check</span>.
+        </div>
+
+        <div className="pt-4 mt-1 border-t border-white/[0.06]">
+          <button
+            type="button"
+            onClick={() => void window.exec.focusCommandCenter({ view: "agents" })}
+            className="h-9 px-3 rounded-lg text-[11.5px] font-medium bg-white/[0.06] hover:bg-white/[0.10] border border-white/[0.10] text-white/85"
+          >
+            View Agents graph →
+          </button>
+          <div className="text-[10px] text-white/30 mt-1.5">See which CLIs are wired to Vmax as connected nodes.</div>
         </div>
       </div>
     </div>

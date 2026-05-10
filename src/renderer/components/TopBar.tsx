@@ -12,9 +12,7 @@ type Props = {
 export default function TopBar({ active, busy, repoName, branch, onStart, onChangeRepo }: Props) {
   return (
     <div className="drag h-12 flex items-center px-4 border-b border-white/5 bg-[#0d0d10] select-none">
-      <div className="pl-16 text-[13px] font-semibold tracking-tight text-white/85">
-        Exec
-      </div>
+      <div className="pl-16 text-[13px] font-semibold tracking-tight text-white/85">Vmax</div>
       <div className="ml-3 text-[11px] text-white/40">control layer for coding agents</div>
 
       <div className="ml-auto flex items-center gap-3">
@@ -42,7 +40,7 @@ export default function TopBar({ active, busy, repoName, branch, onStart, onChan
               : "bg-white text-black hover:bg-white/90 shadow-[0_0_24px_-4px_rgba(255,255,255,0.4)]"}
             ${busy ? "opacity-60 cursor-wait" : ""}`}
         >
-          {busy ? "Starting…" : active ? "● Running" : "Start Exec"}
+          {busy ? "Starting…" : active ? "● Running" : "Start Vmax"}
         </button>
       </div>
     </div>

@@ -16,7 +16,7 @@ export default function MessageThread({
         ))}
         {pending && (
           <div className="rounded-xl border border-violet-300/15 bg-violet-500/[0.06] px-3 py-2">
-            <div className="text-[9.5px] uppercase tracking-[0.14em] text-violet-200/85 mb-0.5">Exec</div>
+            <div className="text-[9.5px] uppercase tracking-[0.14em] text-violet-200/85 mb-0.5">Vmax</div>
             <div className="flex items-center gap-2 text-[12px] text-white/55">
               <div className="w-1.5 h-1.5 rounded-full bg-violet-300 animate-pulse" />
               Thinking…
@@ -39,7 +39,7 @@ function Bubble({ role, text }: { role: "user" | "assistant"; text: string }) {
   }
   return (
     <div className="rounded-xl bg-violet-500/[0.06] border border-violet-300/15 px-3 py-2">
-      <div className="text-[9.5px] uppercase tracking-[0.14em] text-violet-200/85 mb-0.5">Exec</div>
+      <div className="text-[9.5px] uppercase tracking-[0.14em] text-violet-200/85 mb-0.5">Vmax</div>
       <p className="text-[12.5px] text-white/95 leading-relaxed whitespace-pre-wrap">{text}</p>
     </div>
   );

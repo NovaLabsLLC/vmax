@@ -96,7 +96,7 @@ declare global {
       setInteractive: (on: boolean) => Promise<void>;
       openOverlay: () => Promise<void>;
       closeOverlay: () => Promise<void>;
-      focusCommandCenter: (opts?: { view?: "home" | "workspace" | "chats" | "profile" | "settings" | "help" }) => Promise<void>;
+      focusCommandCenter: (opts?: { view?: "home" | "workspace" | "chats" | "profile" | "settings" | "help" | "agents" }) => Promise<void>;
       onCcNavigate: (cb: (p: { view?: string }) => void) => () => void;
 
       pillInterruptSpeech: () => Promise<void>;
@@ -123,9 +123,24 @@ declare global {
 
       getProfile: () => Promise<{ name?: string; email?: string; role?: string } | null>;
       saveProfile: (p: { name?: string; email?: string; role?: string }) => Promise<{ name?: string; email?: string; role?: string }>;
-      getSettings: () => Promise<{ openaiApiKey: string; anthropicApiKey: string; cursorAutoSend: boolean; defaultProvider: "auto" | "openai" | "claude"; talkBack: boolean }>;
-      saveSettings: (s: Partial<{ openaiApiKey: string; anthropicApiKey: string; cursorAutoSend: boolean; defaultProvider: "auto" | "openai" | "claude"; talkBack: boolean }>) => Promise<any>;
-      onSettingsUpdated: (cb: (s: { openaiApiKey?: string; anthropicApiKey?: string; cursorAutoSend?: boolean; defaultProvider?: string; talkBack?: boolean }) => void) => () => void;
+      getSettings: () => Promise<{
+        openaiApiKey: string;
+        anthropicApiKey: string;
+        linearApiKey: string;
+        cursorAutoSend: boolean;
+        defaultProvider: "auto" | "openai" | "claude";
+        talkBack: boolean;
+      }>;
+      saveSettings: (s: Partial<{
+        openaiApiKey: string;
+        anthropicApiKey: string;
+        linearApiKey: string;
+        cursorAutoSend: boolean;
+        defaultProvider: "auto" | "openai" | "claude";
+        talkBack: boolean;
+      }>) => Promise<any>;
+      linearVerify: (apiKey?: string) => Promise<{ ok: boolean; userName?: string; email?: string; error?: string }>;
+      onSettingsUpdated: (cb: (s: { openaiApiKey?: string; anthropicApiKey?: string; linearApiKey?: string; cursorAutoSend?: boolean; defaultProvider?: string; talkBack?: boolean }) => void) => () => void;
       listSessions: () => Promise<{ id: string; title: string; updatedAt: number; createdAt: number; repoName: string | null; repoPath: string | null }[]>;
       getSession: (id: string) => Promise<any | null>;
       saveSession: (s: any) => Promise<any>;
@@ -171,6 +186,8 @@ declare global {
       onVmaxResponse: (cb: (p: VmaxOverlayBroadcast) => void) => () => void;
       setOverlayExpanded: (expanded: boolean) => Promise<boolean>;
       setOverlayContentHeight: (height: number) => Promise<boolean>;
+      setOverlayToolbarWidth: (width: number) => Promise<boolean>;
+      setOverlayBounds: (opts: { width: number; height: number; animate?: boolean }) => Promise<boolean>;
       openUrl: (url: string) => Promise<boolean>;
       vmaxPanelAction: (p: VmaxPanelAction) => Promise<boolean>;
       onVmaxPanelAction: (cb: (p: VmaxPanelAction) => void) => () => void;

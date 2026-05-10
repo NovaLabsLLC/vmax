@@ -73,6 +73,13 @@ contextBridge.exposeInMainWorld("exec", {
   },
   setOverlayExpanded: (expanded) => ipcRenderer.invoke("overlay:set-expanded", { expanded: !!expanded }),
   setOverlayContentHeight: (height) => ipcRenderer.invoke("overlay:set-content-height", { height: Number(height) || 0 }),
+  setOverlayToolbarWidth: (width) => ipcRenderer.invoke("overlay:set-toolbar-width", { width: Number(width) || 0 }),
+  setOverlayBounds: (opts) =>
+    ipcRenderer.invoke("overlay:set-bounds", {
+      width: Number(opts?.width) || 0,
+      height: Number(opts?.height) || 0,
+      animate: !!opts?.animate,
+    }),
   openUrl: (url) => ipcRenderer.invoke("exec:open-url", url),
   vmaxPanelAction: (p) => ipcRenderer.invoke("exec:vmax-panel-action", p),
   onVmaxPanelAction: (cb) => {
@@ -92,6 +99,7 @@ contextBridge.exposeInMainWorld("exec", {
   saveProfile: (p) => ipcRenderer.invoke("exec:save-profile", p),
   getSettings: () => ipcRenderer.invoke("exec:get-settings"),
   saveSettings: (s) => ipcRenderer.invoke("exec:save-settings", s),
+  linearVerify: (apiKey) => ipcRenderer.invoke("linear:verify", { apiKey: apiKey || "" }),
   onSettingsUpdated: (cb) => {
     const h = (_e, settings) => cb(settings || {});
     ipcRenderer.on("exec:settings-updated", h);

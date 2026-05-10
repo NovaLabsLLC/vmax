@@ -43,9 +43,8 @@ export default function Launcher({
 
       {!active ? (
         <>
-          <Logo />
           <div className="text-[12px] text-white/55 tracking-tight ml-0.5 leading-tight">
-            <span className="text-white/85 font-semibold">Exec</span>
+            <span className="text-white/85 font-semibold">Vmax</span>
             <span className="text-white/35"> · control layer</span>
           </div>
           <button
@@ -58,7 +57,7 @@ export default function Launcher({
               flex items-center gap-1.5
               ${busy ? "opacity-60 cursor-wait" : ""}`}
           >
-            {busy ? "Starting…" : "Start Exec"}
+            {busy ? "Starting…" : "Start Vmax"}
             {!busy && (
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="-mr-0.5 transition-transform group-hover:translate-x-0.5">
                 <line x1="5" y1="12" x2="19" y2="12" />
@@ -109,16 +108,6 @@ export default function Launcher({
           </button>
         </>
       )}
-    </div>
-  );
-}
-
-function Logo() {
-  return (
-    <div className="w-6 h-6 rounded-md flex items-center justify-center text-[11px] font-bold
-                    bg-gradient-to-br from-white to-white/85 text-black
-                    shadow-[0_1px_2px_rgba(0,0,0,0.4)]">
-      E
     </div>
   );
 }

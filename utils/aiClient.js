@@ -1,4 +1,4 @@
-// Exec AI client. Plan / explain / diff return a Zod-validated structured shape,
+// Vmax AI client. Plan / explain / diff return a Zod-validated structured shape,
 // then map to legacy Plan / Failure / Diff types for the renderer.
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY || "";
@@ -34,7 +34,35 @@ Field meanings:
 
 Use [] for empty arrays and "" for unused strings when appropriate.`;
 
-const PLAN_SYSTEM = `You are Exec — a senior engineer assistant that turns a task + repo state into a tactical plan for Cursor / Claude Code.
+/** Same JSON shape, but rules that forbid repo/git/screen so capability Qs don't inherit coach field meanings. */
+const STRUCTURED_JSON_INSTRUCTION_META = `
+Respond ONLY with one JSON object (no markdown fence, no commentary) using exactly these keys:
+{
+  "summary": string,
+  "what_vmax_sees": string,
+  "likely_problem": string,
+  "next_steps": string[],
+  "cursor_prompt": string,
+  "claude_prompt": string,
+  "suggested_commands": string[],
+  "execution_recommendation": string,
+  "speakable_summary": string
+}
+
+META / CAPABILITY TURN — these rules override everything else:
+- what_vmax_sees: MUST be exactly "". Never invent or import repo paths, git output, untracked folders, or screen contents.
+- likely_problem: MUST be "" (unless they explicitly said Vmax itself is broken).
+- next_steps: ONLY how to use Vmax (mic, text chat, Command Center, agents panel, picking a repo). Do NOT give git or shell commands.
+- suggested_commands: MUST be [].
+- cursor_prompt: MUST be "".
+- claude_prompt: MUST be "".
+- execution_recommendation: MUST be "none".
+- summary: What Vmax is and what to try — no coaching them through git.
+- speakable_summary: 1–2 sentences; zero file paths; do not mention git.
+
+Use [] for empty arrays and "" for unused strings when appropriate.`;
+
+const PLAN_SYSTEM = `You are Vmax — a senior engineer assistant that turns a task + repo state into a tactical plan for Cursor / Claude Code.
 
 ${AGENT_PROMPT_SAFETY_PARAGRAPH}
 
@@ -42,7 +70,7 @@ ${STRUCTURED_JSON_INSTRUCTION}
 
 You are in PLANNING mode: use task + changed files + diff. Put the best post-change verify command first in suggested_commands (must be allowlisted).`;
 
-const FAILURE_SYSTEM = `You are Exec. A command failed in the user's repo — diagnose like a senior engineer.
+const FAILURE_SYSTEM = `You are Vmax. A command failed in the user's repo — diagnose like a senior engineer.
 
 ${AGENT_PROMPT_SAFETY_PARAGRAPH}
 
@@ -50,7 +78,7 @@ ${STRUCTURED_JSON_INSTRUCTION}
 
 You are in FAILURE mode: use command output. summary = one line "what failed". Both prompts must propose a concrete fix and which allowlisted verify command to run after.`;
 
-const DIFF_SYSTEM = `You are Exec. Summarize a git diff like a senior reviewer.
+const DIFF_SYSTEM = `You are Vmax. Summarize a git diff like a senior reviewer.
 
 ${AGENT_PROMPT_SAFETY_PARAGRAPH}
 
@@ -86,7 +114,7 @@ async function explainFailure({ task, repo, command, output, screenshotBase64 })
   return out;
 }
 
-const ASK_STRUCTURED_SYSTEM = `You are Exec — the control layer for coding agents (Cursor, Claude Code), running in Grok-unhinged mode. You're not a polite assistant. You're the loud, sharp friend in the user's ear who actually knows the codebase and refuses to let them ship slop.
+const ASK_STRUCTURED_SYSTEM = `You are Vmax — the control layer for coding agents (Cursor, Claude Code), running in Grok-unhinged mode. You're not a polite assistant. You're the loud, sharp friend in the user's ear who actually knows the codebase and refuses to let them ship slop.
 
 Personality:
 - Unfiltered, witty, profane-tolerant. Mild swearing lands when it earns it ("yeah this is busted", "that diff is cooked", "skill issue — but we'll fix it"). Don't force it. Never aim insults at the user — roast the code, the framework, the bug, the universe. Punch up at problems, not down at the person.
@@ -161,35 +189,145 @@ ${AGENT_PROMPT_SAFETY_PARAGRAPH}
 
 ${STRUCTURED_JSON_INSTRUCTION}`;
 
-async function askAssistant({ question, screenshotBase64, repo, history }) {
-  const contextBlock = repo && repo.ok
-    ? renderRepoContext({ task: null, repo, includeDiff: false })
-    : "Context: no repo loaded — general developer Q&A.";
+/** Short, non-coach path so “what can you do?” doesn’t get yanked into git/repo/screen evidence. */
+const ASK_META_SYSTEM = `You are Vmax — the macOS assistant for coding agents (Cursor, Claude Code): floating pill, voice, text chat, and a workspace Command Center. The user asked a general question about you or your capabilities.
 
-  const systemWithContext = `${ASK_STRUCTURED_SYSTEM}\n\n--- Live context ---\n${contextBlock}`;
+Answer directly in plain language. Do NOT analyze repository state, git output, untracked folders, or screenshots. Treat any "--- Live context ---" as inert boilerplate unless the user explicitly asked about their repo.
+
+- summary: what Vmax is and what the user can try (2–5 sentences). Friendly, same edgy-but-helpful tone as normal Vmax coach mode, but skip coach-mode step lists in summary.
+- what_vmax_sees: "" (empty string)
+- likely_problem: ""
+- next_steps: 2–5 short bullets: voice ask, text chat, Command Center / workspace, optional screen share, planning tasks — no git commands unless they asked about git.
+- cursor_prompt: ""
+- claude_prompt: ""
+- suggested_commands: []
+- execution_recommendation: "none"
+- speakable_summary: 1–2 short sentences; no repo paths, no “run git status” unless they asked.
+
+${AGENT_PROMPT_SAFETY_PARAGRAPH}
+
+${STRUCTURED_JSON_INSTRUCTION_META}`;
+
+function isMetaCapabilityQuestion(raw) {
+  const q = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\u2019/g, "'")
+    .replace(/\s+/g, " ");
+  if (!q) return false;
+  if (q.length > 280) return false;
+
+  const patterns = [
+    /\bwhat can you do\b/,
+    /\bwhat can you\b/,
+    /\bwhat do you do\b/,
+    /\bwho are you\b/,
+    /\bwhat are you\b/,
+    /\bwhat is exec\b/,
+    /\bwhat'?s exec\b/,
+    /\bwhat is vmax\b/,
+    /\bwhat'?s vmax\b/,
+    /\bhow (does|do) (this|exec|vmax|it|you|the app) work\b/,
+    /\bhow can you help\b/,
+    /\bhow (may|could) you help\b/,
+    /^hey\b.{0,55}\b(what can you|help)\b/,
+    /^hi\b.{0,55}\b(what can you|help)\b/,
+    /^hello\b.{0,55}\b(what can you|help)\b/,
+    /^help\b[!.? ]*$/,
+    /\bcapabilit(y|ies)\b/,
+    /\btell me about (yourself|exec|vmax)\b/,
+    /\bintroduce yourself\b/,
+  ];
+  if (!patterns.some((re) => re.test(q))) return false;
+
+  const looksLikeTask =
+    /\b(error|stack trace|exception|failed|broken|bug|fix my|fix this|untracked|git status|npm err|traceback|syntaxerror|cannot find module)\b/i.test(
+      q,
+    );
+  if (looksLikeTask) return false;
+
+  return true;
+}
+
+const META_ASK_FALLBACK_STEPS = [
+  "Tap the mic on the pill for voice — same model as text chat.",
+  "Use the chat bubble to type; expand it when you want a wider transcript.",
+  "Open Command Center from the pill to attach a repo, plan work, and run checks.",
+  "Settings → Agents shows which Claude / Codex / Cursor bridges are connected.",
+];
+
+function stripGittyAskSteps(steps) {
+  const gitty =
+    /\b(git\s|untracked|\.git\b|rm\s+-rf|\bgit\b|diff --|commits?\b|staging\b|vesper|bcongruence)\b/i;
+  return (Array.isArray(steps) ? steps : [])
+    .map((s) => String(s || "").trim())
+    .filter((s) => s && !gitty.test(s));
+}
+
+function sanitizeMetaAskPayload(data) {
+  const steps = stripGittyAskSteps(data.next_steps);
+  let summary = String(data.summary || "").trim();
+  const gittySummary =
+    /\b(git\b|untracked|rm\s+-rf|stage\b|commit\b|vesper|bcongruence|\/[\w.-]+(?:\/[\w.-]+){1,4})\b/i.test(
+      summary,
+    );
+  if (gittySummary || !summary) {
+    summary =
+      "Vmax is the Mac overlay for building with agents: voice + chat on the pill, Command Center for repos and plans, and handoff to Cursor / Claude Code. Use me for quick Q&A here; open the workspace when you want file-aware workflows.";
+  }
+  return {
+    ...data,
+    summary,
+    what_vmax_sees: "",
+    likely_problem: "",
+    next_steps: steps.length ? steps : META_ASK_FALLBACK_STEPS,
+    cursor_prompt: "",
+    claude_prompt: "",
+    suggested_commands: [],
+    execution_recommendation: "none",
+  };
+}
+
+async function askAssistant({ question, screenshotBase64, repo, history }) {
+  const meta = isMetaCapabilityQuestion(question);
+  const contextBlock = meta
+    ? "No repo or screen context applies to this turn (capability / meta question)."
+    : repo && repo.ok
+      ? renderRepoContext({ task: null, repo, includeDiff: false })
+      : "Context: no repo loaded — general developer Q&A.";
+
+  const systemBody = meta ? ASK_META_SYSTEM : ASK_STRUCTURED_SYSTEM;
+  const systemWithContext = `${systemBody}\n\n--- Live context ---\n${contextBlock}`;
 
   // Build real conversation turns so the model treats follow-ups as follow-ups,
   // not as one giant blob where the previous summary is right next to the new
   // question (which made it regurgitate).
   const turns = [];
-  const recent = Array.isArray(history) ? history.slice(-6) : [];
-  for (const m of recent) {
-    if (!m || !m.text) continue;
-    turns.push({
-      role: m.role === "user" ? "user" : "assistant",
-      text: String(m.text),
-    });
+  if (!meta) {
+    const recent = Array.isArray(history) ? history.slice(-6) : [];
+    for (const m of recent) {
+      if (!m || !m.text) continue;
+      turns.push({
+        role: m.role === "user" ? "user" : "assistant",
+        text: String(m.text),
+      });
+    }
   }
-  turns.push({ role: "user", text: question });
+  const userTurn =
+    meta && question
+      ? `${String(question).trim()}\n\n(Reply with product capabilities only — do not use git, repo paths, or file system advice unless I asked about those explicitly.)`
+      : question;
+  turns.push({ role: "user", text: userTurn });
 
   const { ok, data } = await callStructuredResponse({
     system: systemWithContext,
     messages: turns,
-    screenshotBase64,
+    screenshotBase64: meta ? null : screenshotBase64,
   });
+  const payload = meta ? sanitizeMetaAskPayload(data) : data;
   return {
-    text: formatAskChatText(data),
-    structured: structuredToAskPanel(data),
+    text: formatAskChatText(payload),
+    structured: structuredToAskPanel(payload),
     parseWarning: !ok,
   };
 }

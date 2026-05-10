@@ -546,7 +546,7 @@ export default function WorkspacePanel({
   }): string {
     if (!r.ok) {
       if (r.reason === "accessibility") {
-        return "Need Accessibility permission for Exec (Electron) in System Settings. Prompt is on your clipboard.";
+        return "Need Accessibility permission for Vmax (Electron) in System Settings. Prompt is on your clipboard.";
       }
       return r.message || `Cursor handoff failed${r.reason ? ` (${r.reason})` : ""}. Prompt is on your clipboard.`;
     }
@@ -596,7 +596,7 @@ export default function WorkspacePanel({
 
     setMessages((prev) => [...prev, { role: "user", text: q, ts: Date.now() }]);
     setAskPending(true);
-    beginActivity("plan", "Asking Exec…");
+    beginActivity("plan", "Asking Vmax…");
     try {
       const settings = await window.exec.getSettings();
       cursorAutoSendRef.current = settings.cursorAutoSend !== false;
@@ -658,7 +658,7 @@ export default function WorkspacePanel({
 
   async function runScanRepoAction() {
     if (!repo?.ok || !repoPath) {
-      const msg = "Need an active repo to scan. Start Exec on a repo first.";
+      const msg = "Need an active repo to scan. Start Vmax on a repo first.";
       setMessages((prev) => [...prev, { role: "assistant", text: msg, ts: Date.now() }]);
       speakAloud(proseToSpeakable(msg));
       return;
@@ -983,7 +983,7 @@ export default function WorkspacePanel({
 
   function startOpenClawWithMessage(message: string) {
     if (!repoPath || !repo?.ok) {
-      say("Start Exec on a repo before running OpenClaw.", "warn");
+      say("Start Vmax on a repo before running OpenClaw.", "warn");
       return;
     }
     if (runIdRef.current) {
@@ -1057,7 +1057,7 @@ export default function WorkspacePanel({
                         shadow-[0_0_24px_-4px_rgba(255,255,255,0.45)]
                         ${starting ? "opacity-60 cursor-wait" : ""}`}
           >
-            {starting ? "Starting…" : "Start Exec"}
+            {starting ? "Starting…" : "Start Vmax"}
           </button>
         ) : (
           <div className="ml-auto flex items-center gap-2">
@@ -1172,7 +1172,7 @@ export default function WorkspacePanel({
 
       {!active && (
         <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] px-3 py-2 text-[11.5px] text-white/55">
-          You can ask anything above. <span className="text-white">Start Exec</span> on a repo to unlock plan / typecheck / diff / Cursor handoff.
+          You can ask anything above. <span className="text-white">Start Vmax</span> on a repo to unlock plan / typecheck / diff / Cursor handoff.
         </div>
       )}
     </div>

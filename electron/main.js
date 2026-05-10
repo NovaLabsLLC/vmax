@@ -1,8 +1,8 @@
-// Exec — control layer for coding agents.
+// Vmax — control layer for coding agents.
 //
 // Two windows:
 //   • Command Center: a normal macOS window (traffic lights, opaque). Lists
-//     active projects, suggestions, reminders. From here you launch Exec.
+//     active projects, suggestions, reminders. From here you launch Vmax.
 //   • Overlay: the transparent always-on-top floating card spawned on demand.
 // Both windows share the same React build, routed via the URL hash:
 //   #/command  → CommandCenter
@@ -37,6 +37,7 @@ const {
   askAssistant,
 } = require("../utils/aiClient.js");
 const { getCommandBlockReason, CURSOR_CLIPBOARD_SAFETY_FOOTER, EXIT_POLICY_BLOCK } = require("../utils/commandSafety.js");
+const { verifyLinearApiKey } = require("../utils/linearApi.js");
 
 const isDev = process.env.NODE_ENV === "development";
 const DEV_URL = "http://localhost:5180";
@@ -77,7 +78,7 @@ function loadView(win, hash) {
 // The Command Center is a hidden background window by default — it only
 // exists so voice IPC has somewhere to land. The user-visible UI is the
 // floating pill (overlayWindow). Pass { visible: true } to surface it
-// (e.g. from the pill's "Exec" button or onboarding).
+// (e.g. from the pill's "Vmax" button or onboarding).
 function createCommandWindow({ visible = true } = {}) {
   if (commandWindow && !commandWindow.isDestroyed()) {
     if (visible) {
@@ -93,6 +94,7 @@ function createCommandWindow({ visible = true } = {}) {
     minHeight: 520,
     backgroundColor: "#08080a",
     show: visible,
+    title: "Vmax",
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 14, y: 16 },
     webPreferences: {
@@ -107,13 +109,115 @@ function createCommandWindow({ visible = true } = {}) {
 }
 
 // ---- Overlay window ----
-const PILL_WIDTH = 240;
+/** Minimum / default content width; renderer measures the shell and calls `overlay:set-bounds`. */
+const PILL_WIDTH_MIN = 300;
+const PILL_WIDTH_DEFAULT = 400;
 const PILL_HEIGHT = 56;
-/** Max overlay window height. Renderer measures actual content and asks for
- *  the exact height it needs via `overlay:set-content-height`; this is just
- *  the upper safety bound so a runaway response can't push the window off
- *  screen. */
+/** Upper bound for overlay height (renderer asks for exact size below this). */
 const OVERLAY_EXPANDED_HEIGHT = 720;
+let overlayPillWidth = PILL_WIDTH_DEFAULT;
+
+function clampOverlayContentWidth(w) {
+  const primary = screen.getPrimaryDisplay();
+  const maxByScreen = Math.max(PILL_WIDTH_MIN, primary.workAreaSize.width - 32);
+  const maxW = Math.min(1100, maxByScreen);
+  return Math.max(PILL_WIDTH_MIN, Math.min(maxW, Math.ceil(Number(w) || PILL_WIDTH_MIN)));
+}
+
+function clampOverlayContentHeight(h) {
+  const minH = PILL_HEIGHT;
+  const maxH = OVERLAY_EXPANDED_HEIGHT;
+  return Math.max(minH, Math.min(maxH, Math.ceil(Number(h) || minH)));
+}
+
+/** Keep the bottom edge fixed; horizontal center preserved when width changes. */
+function applyOverlayContentSize(nextW, nextH) {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  const nw = clampOverlayContentWidth(nextW);
+  const nh = clampOverlayContentHeight(nextH);
+  const [x, y] = overlayWindow.getPosition();
+  const [curW, curH] = overlayWindow.getContentSize();
+  if (nw === curW && nh === curH) {
+    overlayPillWidth = nw;
+    return;
+  }
+  const centerX = x + curW / 2;
+  const newX = Math.round(centerX - nw / 2);
+  const primary = screen.getPrimaryDisplay();
+  const { x: wx, width: ww } = primary.workArea;
+  const clampedX = Math.min(Math.max(newX, wx + 8), wx + Math.max(ww - nw - 8, wx + 8));
+  overlayPillWidth = nw;
+  overlayWindow.setPosition(clampedX, y + (curH - nh));
+  overlayWindow.setContentSize(nw, nh);
+}
+
+/** @type {ReturnType<typeof setTimeout> | null} */
+let overlayBoundsAnimTimer = null;
+/** @type {{ w: number; h: number } | null} */
+let pendingOverlaySnapBounds = null;
+
+function cancelOverlayBoundsAnimation() {
+  if (overlayBoundsAnimTimer) {
+    clearTimeout(overlayBoundsAnimTimer);
+    overlayBoundsAnimTimer = null;
+  }
+  pendingOverlaySnapBounds = null;
+}
+
+/** Immediate resize; stops any in-flight bounds animation. */
+function setOverlayContentSize(nextW, nextH) {
+  cancelOverlayBoundsAnimation();
+  applyOverlayContentSize(nextW, nextH);
+}
+
+const OVERLAY_BOUNDS_ANIM_MS = 300;
+
+/** Snap to size, or queue to end of animation so ResizeObserver updates don't fight the tween. */
+function snapOverlayBounds(width, height) {
+  const nw = clampOverlayContentWidth(width);
+  const nh = clampOverlayContentHeight(height);
+  if (overlayBoundsAnimTimer) {
+    pendingOverlaySnapBounds = { w: nw, h: nh };
+    return;
+  }
+  applyOverlayContentSize(nw, nh);
+}
+
+function animateOverlayBounds(width, height) {
+  cancelOverlayBoundsAnimation();
+  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  const targetW = clampOverlayContentWidth(width);
+  const targetH = clampOverlayContentHeight(height);
+  const [fromW, fromH] = overlayWindow.getContentSize();
+  if (Math.abs(fromW - targetW) < 3 && Math.abs(fromH - targetH) < 3) {
+    applyOverlayContentSize(targetW, targetH);
+    return;
+  }
+  const start = Date.now();
+  const step = () => {
+    if (!overlayWindow || overlayWindow.isDestroyed()) {
+      overlayBoundsAnimTimer = null;
+      return;
+    }
+    const t = Math.min(1, (Date.now() - start) / OVERLAY_BOUNDS_ANIM_MS);
+    const e = 1 - (1 - t) ** 3;
+    const w = Math.round(fromW + (targetW - fromW) * e);
+    const h = Math.round(fromH + (targetH - fromH) * e);
+    applyOverlayContentSize(w, h);
+    if (t < 1) {
+      overlayBoundsAnimTimer = setTimeout(step, 16);
+    } else {
+      overlayBoundsAnimTimer = null;
+      applyOverlayContentSize(targetW, targetH);
+      if (pendingOverlaySnapBounds) {
+        const p = pendingOverlaySnapBounds;
+        pendingOverlaySnapBounds = null;
+        applyOverlayContentSize(p.w, p.h);
+      }
+    }
+  };
+  overlayBoundsAnimTimer = setTimeout(step, 0);
+}
 /** Extra height above the pill row when the caption / dialogue strip is open */
 const OVERLAY_CAPTION_ZONE = 100;
 
@@ -130,6 +234,7 @@ function createOverlayWindow() {
     overlayWindow.focus();
     return;
   }
+  overlayPillWidth = clampOverlayContentWidth(PILL_WIDTH_DEFAULT);
   const primary = screen.getPrimaryDisplay();
   const { width, height } = primary.workAreaSize;
   const { x: workX, y: workY } = primary.workArea;
@@ -138,9 +243,9 @@ function createOverlayWindow() {
   // the whole window around the screen. Vibrancy paints the entire window
   // as Apple-style glass — adapts to dark/light content behind it.
   overlayWindow = new BrowserWindow({
-    width: PILL_WIDTH,
+    width: overlayPillWidth,
     height: PILL_HEIGHT,
-    x: workX + Math.round((width - PILL_WIDTH) / 2),
+    x: workX + Math.round((width - overlayPillWidth) / 2),
     y: workY + height - PILL_HEIGHT - 24,
     vibrancy: process.platform === "darwin" ? "fullscreen-ui" : undefined,
     visualEffectState: "active",
@@ -226,10 +331,9 @@ ipcMain.handle("overlay:set-expanded", (_evt, { expanded }) => {
   // will immediately push the exact required height via set-content-height,
   // so we don't need to guess large here.
   const targetH = expanded ? Math.min(180, OVERLAY_EXPANDED_HEIGHT) : PILL_HEIGHT;
-  const [x, y] = overlayWindow.getPosition();
   const [, curH] = overlayWindow.getContentSize();
-  overlayWindow.setContentSize(PILL_WIDTH, targetH);
-  overlayWindow.setPosition(x, y + (curH - targetH));
+  if (targetH === curH) return true;
+  setOverlayContentSize(overlayPillWidth, targetH);
   return true;
 });
 
@@ -237,14 +341,31 @@ ipcMain.handle("overlay:set-expanded", (_evt, { expanded }) => {
 // match. Bottom edge stays anchored so the pill doesn't jump.
 ipcMain.handle("overlay:set-content-height", (_evt, { height }) => {
   if (!overlayWindow || overlayWindow.isDestroyed()) return false;
-  const minH = PILL_HEIGHT;
-  const maxH = OVERLAY_EXPANDED_HEIGHT;
-  const targetH = Math.max(minH, Math.min(maxH, Math.ceil(Number(height) || minH)));
-  const [x, y] = overlayWindow.getPosition();
+  const targetH = clampOverlayContentHeight(height);
   const [, curH] = overlayWindow.getContentSize();
   if (targetH === curH) return true;
-  overlayWindow.setContentSize(PILL_WIDTH, targetH);
-  overlayWindow.setPosition(x, y + (curH - targetH));
+  snapOverlayBounds(overlayPillWidth, targetH);
+  return true;
+});
+
+ipcMain.handle("overlay:set-toolbar-width", (_evt, { width }) => {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return false;
+  const targetW = clampOverlayContentWidth(width);
+  const [curW, curH] = overlayWindow.getContentSize();
+  if (targetW === curW) return true;
+  snapOverlayBounds(width, curH);
+  return true;
+});
+
+ipcMain.handle("overlay:set-bounds", (_evt, payload) => {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return false;
+  const w = Number(payload?.width) || PILL_WIDTH_MIN;
+  const h = Number(payload?.height) || PILL_HEIGHT;
+  if (payload?.animate) {
+    animateOverlayBounds(w, h);
+  } else {
+    snapOverlayBounds(w, h);
+  }
   return true;
 });
 
@@ -301,10 +422,22 @@ ipcMain.handle("exec:get-settings", () => {
   return {
     openaiApiKey: sett.openaiApiKey || "",
     anthropicApiKey: sett.anthropicApiKey || "",
+    linearApiKey: sett.linearApiKey || "",
     cursorAutoSend: sett.cursorAutoSend !== false,
     defaultProvider: sett.defaultProvider || "auto",
     talkBack: sett.talkBack !== false,
   };
+});
+ipcMain.handle("linear:verify", async (_evt, { apiKey } = {}) => {
+  try {
+    const sett = readState().settings || {};
+    const key = String(apiKey ?? sett.linearApiKey ?? "").trim();
+    if (!key) return { ok: false, error: "No API key — paste one below or save settings first." };
+    const { userName, email } = await verifyLinearApiKey(key);
+    return { ok: true, userName, email };
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) };
+  }
 });
 ipcMain.handle("exec:save-settings", (_evt, settings) => {
   const s = readState();
@@ -665,7 +798,7 @@ ipcMain.handle("exec:run-claude-cli", async (evt, { runId, repoPath, prompt }) =
 // ---- CLI helper: status + guided login ----
 // Detects whether the Claude Code CLI and Codex CLI are installed, and lets
 // the renderer trigger `<bin> login` in a real Terminal window so the user
-// can complete the OAuth flow (which needs a real TTY) without leaving Exec.
+// can complete the OAuth flow (which needs a real TTY) without leaving Vmax.
 function execText(cmd, args, opts = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { ...opts, shell: false });
@@ -835,7 +968,7 @@ function friendlyCodexError(err) {
   if (code === "ENOENT") {
     return (
       "Codex CLI not found on PATH. Install: npm i -g @openai/codex "
-      + "— then restart Exec — or set CODEX_BIN to the full path of the codex executable."
+      + "— then restart Vmax — or set CODEX_BIN to the full path of the codex executable."
     );
   }
   if (code === "EACCES") return "Codex CLI is not executable. Check permissions or set CODEX_BIN.";
@@ -863,7 +996,7 @@ ipcMain.handle("exec:run:cancel", (_evt, runId) => {
   return true;
 });
 
-// ---- Exec router: pick the right coding agent for a prompt ----
+// ---- Vmax router: pick the right coding agent for a prompt ----
 // Heuristic, intentionally fast (no LLM round-trip) so dispatch feels instant.
 //   • cursor — when the user is asking for in-editor edits to specific files
 //     ("edit X", "in @file", "fix the function in foo.ts").
@@ -1017,6 +1150,11 @@ ipcMain.handle("ai:summarize-diff", (_evt, payload) =>
 
 // ---- lifecycle ----
 app.whenReady().then(() => {
+  try {
+    app.setName("Vmax");
+  } catch {
+    /* noop */
+  }
   // Auto-grant the first screen source so navigator.mediaDevices.getDisplayMedia
   // works without an explicit picker. macOS still gates this behind its
   // Screen Recording TCC prompt the first time around.
@@ -1044,7 +1182,7 @@ app.whenReady().then(() => {
     { useSystemPicker: true }
   );
   // Boot straight into the floating pill. The Command Center is created
-  // hidden so it can still receive voice routing IPC; the pill's "Exec"
+  // hidden so it can still receive voice routing IPC; the pill's "Vmax"
   // button shows it on demand.
   (async () => {
     const onboarded = !!readState().onboardedAt;
