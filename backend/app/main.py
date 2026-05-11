@@ -6,10 +6,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routes import assistant, health, task, voice
+from .logging_setup import configure_logging
+from .routes import assistant, health, linear, task, voice
 
 
 def create_app() -> FastAPI:
+    configure_logging()
     app = FastAPI(
         title="Vmax backend",
         version="0.1.0",
@@ -31,6 +33,7 @@ def create_app() -> FastAPI:
     app.include_router(voice.router, prefix="/v1")
     app.include_router(assistant.router, prefix="/v1")
     app.include_router(task.router, prefix="/v1")
+    app.include_router(linear.router, prefix="/v1/linear")
 
     return app
 

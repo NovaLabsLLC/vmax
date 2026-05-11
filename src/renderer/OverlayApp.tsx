@@ -78,14 +78,21 @@ export default function OverlayApp() {
   }, []);
 
   useEffect(() => {
-    if (!chatOpen) {
-      screen.stop();
-      return;
-    }
-    void screen.start();
-    return () => screen.stop();
+    // Start screen capture once the user first opens chat (or invokes
+    // voice). After it's started, we deliberately keep the stream alive
+    // for the lifetime of the overlay window — calling stop() and start()
+    // on every chat toggle re-runs getDisplayMedia, which can re-prompt
+    // the user for permission. macOS grants the TCC prompt once; this
+    // keeps the underlying MediaStream we already negotiated.
+    if (chatOpen) void screen.start();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- useScreen methods are stable enough per mount
   }, [chatOpen]);
+
+  useEffect(() => {
+    // Release the stream when the overlay window unmounts.
+    return () => screen.stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only run on unmount
+  }, []);
 
   useEffect(() => {
     const off = window.exec.onWorkspaceSpeaking((s) => setSpeaking(!!s));

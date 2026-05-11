@@ -21,8 +21,21 @@ from ..schemas.requests import (
     PlanRequest,
     SummarizeDiffRequest,
 )
+from ..config import settings
+from ..logging_setup import log_audit
 from ..schemas.responses import StructuredEnvelope
 from ..services import llm_router
+from ..services.linear_client import (
+    LinearClientError,
+    extract_linear_issue_id,
+    format_linear_issue_summary,
+    format_linear_speakable,
+    format_my_issues_speakable,
+    format_my_issues_summary,
+    get_linear_issue,
+    get_my_linear_issues,
+    is_my_issues_question,
+)
 from ..services.meta_capability import (
     is_meta_capability_question,
     sanitize_meta_ask_payload,
@@ -42,8 +55,144 @@ OUTPUT_TRUNCATE_CHARS = 8_000
 DIFF_TRUNCATE_CHARS = 30_000
 
 
+MY_ISSUES_FETCH_LIMIT = 25
+
+
+async def _linear_single_issue_envelope(issue_id: str) -> StructuredEnvelope | None:
+    """Fetch one issue and render it. Returns None to signal "fall
+    through to the LLM" — used when Linear itself errors. Returns a
+    StructuredEnvelope (even for not-found) when we have a definite
+    answer for the user."""
+    try:
+        issue = await get_linear_issue(issue_id)
+    except LinearClientError as err:
+        log_audit(
+            "ask_linear_shortcut",
+            kind="issue",
+            issue_id=issue_id,
+            ok=False,
+            fell_through=True,
+            error=str(err),
+        )
+        return None
+
+    if not issue:
+        payload = StructuredResponse(
+            summary=f"I couldn't find {issue_id} in Linear.",
+            likely_problem=(
+                "The issue ID may be wrong, deleted, archived, or outside "
+                "your API key permissions."
+            ),
+            speakable_summary=f"I couldn't find {issue_id} in Linear.",
+            execution_recommendation="none",
+        )
+        log_audit(
+            "ask_linear_shortcut",
+            kind="issue",
+            issue_id=issue_id,
+            ok=False,
+            not_found=True,
+        )
+        return StructuredEnvelope(structured=payload, parse_warning=False)
+
+    payload = StructuredResponse(
+        summary=format_linear_issue_summary(issue_id, issue),
+        speakable_summary=format_linear_speakable(issue_id, issue),
+        what_vmax_sees=f"Linear issue {issue_id}",
+        execution_recommendation="none",
+    )
+    log_audit(
+        "ask_linear_shortcut",
+        kind="issue",
+        issue_id=issue_id,
+        ok=True,
+        title=issue.get("title") or "",
+        state=(issue.get("state") or {}).get("name") or "",
+        url=issue.get("url") or "",
+    )
+    return StructuredEnvelope(structured=payload, parse_warning=False)
+
+
+async def _linear_my_issues_envelope() -> StructuredEnvelope | None:
+    """Fetch the viewer's assigned-and-open issues and render them as a
+    priority-sorted list. Returns None on Linear error so the LLM can
+    take over; returns a real envelope (even for an empty queue) when
+    Linear responded."""
+    try:
+        issues = await get_my_linear_issues(limit=MY_ISSUES_FETCH_LIMIT)
+    except LinearClientError as err:
+        log_audit(
+            "ask_linear_shortcut",
+            kind="my_issues",
+            ok=False,
+            fell_through=True,
+            error=str(err),
+        )
+        return None
+
+    payload = StructuredResponse(
+        summary=format_my_issues_summary(issues),
+        speakable_summary=format_my_issues_speakable(issues),
+        what_vmax_sees=f"Linear: {len(issues)} open issues assigned to viewer",
+        execution_recommendation="none",
+    )
+    log_audit(
+        "ask_linear_shortcut",
+        kind="my_issues",
+        ok=True,
+        count=len(issues),
+        top_issue=(issues[0].get("identifier") if issues else ""),
+    )
+    return StructuredEnvelope(structured=payload, parse_warning=False)
+
+
+async def _try_linear_shortcut(question: str) -> StructuredEnvelope | None:
+    """Deterministic Linear answers for two question shapes:
+
+      1. "what is EXE-35" / "show me EXE-35" — fetches the single issue.
+      2. "what should I work on" / "show me my tickets" — fetches all
+         open issues assigned to the viewer, priority-sorted.
+
+    Single-issue check runs first so "what's on my plate for EXE-35"
+    resolves to EXE-35 rather than the whole queue.
+
+    Returns None to mean "fall through to the LLM path" — used when no
+    Linear key is configured, no trigger matched, or Linear itself
+    errored."""
+    if not settings.has_linear:
+        return None
+
+    issue_id = extract_linear_issue_id(question)
+    if issue_id:
+        return await _linear_single_issue_envelope(issue_id)
+
+    if is_my_issues_question(question):
+        return await _linear_my_issues_envelope()
+
+    return None
+
+
 @router.post("/ask", response_model=StructuredEnvelope)
 async def ask(body: AskRequest) -> StructuredEnvelope:
+    # Fast path: deterministic Linear lookup beats hallucinating about a
+    # screenshot. Falls through to the LLM if no issue id is detected,
+    # no key is configured, or Linear errored.
+    shortcut = await _try_linear_shortcut(body.question)
+    if shortcut is not None:
+        log_audit(
+            "ask",
+            source="linear",
+            parse_warning=shortcut.parse_warning,
+            question=body.question,
+            has_screenshot=bool(body.screenshot_base64),
+            history_turns=len(body.history or []),
+            summary=shortcut.structured.summary,
+            speakable_summary=shortcut.structured.speakable_summary,
+            likely_problem=shortcut.structured.likely_problem,
+            execution_recommendation=shortcut.structured.execution_recommendation,
+        )
+        return shortcut
+
     meta = is_meta_capability_question(body.question)
 
     context_block = (
@@ -81,6 +230,25 @@ async def ask(body: AskRequest) -> StructuredEnvelope:
     )
 
     payload = sanitize_meta_ask_payload(result.data) if meta else result.data
+
+    log_audit(
+        "ask",
+        source="llm",
+        meta=meta,
+        parse_warning=not result.ok,
+        question=body.question,
+        has_screenshot=bool(body.screenshot_base64),
+        history_turns=len(body.history or []),
+        summary=payload.summary,
+        speakable_summary=payload.speakable_summary,
+        likely_problem=payload.likely_problem,
+        next_steps_count=len(payload.next_steps or []),
+        suggested_commands_count=len(payload.suggested_commands or []),
+        execution_recommendation=payload.execution_recommendation,
+        has_cursor_prompt=bool(payload.cursor_prompt),
+        has_claude_prompt=bool(payload.claude_prompt),
+    )
+
     return StructuredEnvelope(structured=payload, parse_warning=not result.ok)
 
 

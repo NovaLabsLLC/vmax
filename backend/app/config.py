@@ -21,6 +21,7 @@ def _split_csv(value: str | None) -> list[str]:
 class Settings:
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    linear_api_key: str = ""
 
     # Defaults match the previous Electron client so behaviour doesn't drift.
     openai_model: str = "gpt-4o-mini"
@@ -46,6 +47,10 @@ class Settings:
     def has_anthropic(self) -> bool:
         return bool(self.anthropic_api_key)
 
+    @property
+    def has_linear(self) -> bool:
+        return bool(self.linear_api_key)
+
 
 def _load() -> Settings:
     origins = _split_csv(os.environ.get("VMAX_ALLOWED_ORIGINS"))
@@ -68,6 +73,7 @@ def _load() -> Settings:
     return Settings(
         openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip(),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", "").strip(),
+        linear_api_key=os.environ.get("LINEAR_API_KEY", "").strip(),
         openai_model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
         openai_model_text=os.environ.get("OPENAI_MODEL_TEXT", "").strip() or "",
         anthropic_model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6").strip() or "claude-sonnet-4-6",

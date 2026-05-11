@@ -23,7 +23,13 @@ function register() {
 
     // Auto-grant the first screen source so navigator.mediaDevices
     // .getDisplayMedia works without an explicit picker. macOS still gates
-    // this behind its Screen Recording TCC prompt the first time around.
+    // this behind its Screen Recording TCC prompt the first time around;
+    // after that, our handler returns the primary screen silently.
+    //
+    // We deliberately do NOT pass `useSystemPicker: true` here. The macOS
+    // 15+ system picker re-prompts on every getDisplayMedia call regardless
+    // of past choices, which is what made users see the share-screen dialog
+    // every single time. Our handler skips the picker entirely.
     session.defaultSession.setDisplayMediaRequestHandler(
       async (_request, callback) => {
         try {
@@ -41,11 +47,7 @@ function register() {
           console.error("[exec] desktopCapturer failed:", err);
           callback({});
         }
-      },
-      // macOS 15+: defer to the system picker, which doesn't depend on the
-      // Electron process's stale TCC state. Falls back to the handler above
-      // on older macOS / non-darwin.
-      { useSystemPicker: true }
+      }
     );
 
     (async () => {
