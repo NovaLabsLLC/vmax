@@ -55,6 +55,7 @@ require("./ipc/cursorBridge.js").register();
 require("./ipc/runners.js").register();
 require("./ipc/cliStatus.js").register();
 require("./ipc/dispatch.js").register();
+require("./ipc/taskTrigger.js").register();
 require("./ipc/ai.js").register();
 require("./ipc/perms.js").register();
 require("./lifecycle.js").register();

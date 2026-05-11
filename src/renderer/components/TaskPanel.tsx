@@ -69,6 +69,26 @@ export default function TaskPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [micArmToken, disabled, sending]);
 
+  /**
+   * Keyboard push-to-talk: Option/Alt + Space toggles the mic. Works whether
+   * the textarea is focused or not. Ignores OS key-repeat.
+   */
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const isToggle = e.altKey && !e.metaKey && !e.ctrlKey && (e.code === "Space" || e.key === " ");
+      if (!isToggle) return;
+      if (e.repeat) return;
+      e.preventDefault();
+      if (disabled || transcribingRef.current || sending) return;
+      if (audio.isCapturing()) void stopMic();
+      else void startMicSafe();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // Handlers close over the latest audio/task via refs; deps cover the gating flags.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [disabled, sending]);
+
   function handlePointerDown(e: React.PointerEvent<HTMLButtonElement>) {
     if (disabled || transcribingRef.current || sending) return;
     try {
@@ -167,7 +187,7 @@ export default function TaskPanel({
       <div className="flex items-center justify-between mb-1">
         <div className="text-[10px] uppercase tracking-[0.14em] text-white/40">Task</div>
         <div className="text-[10px] text-white/30">
-          Hold mic, tap to toggle, or type
+          Hold mic, tap to toggle, ⌥Space, or type
         </div>
       </div>
       <textarea
@@ -204,7 +224,7 @@ export default function TaskPanel({
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
         disabled={disabled || transcribing || sending}
-        title="Hold to talk, or tap to start/stop recording"
+        title="Hold to talk · tap to toggle · ⌥Space"
         aria-pressed={micActive}
         className={`absolute right-[44px] bottom-2.5 h-8 w-8 rounded-full flex items-center justify-center
                     transition-all touch-manipulation select-none

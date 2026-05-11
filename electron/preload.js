@@ -156,6 +156,16 @@ contextBridge.exposeInMainWorld("exec", {
   ask: (payload) => ipcRenderer.invoke("ai:ask", payload),
   createProject: (payload) => ipcRenderer.invoke("exec:create-project", payload || {}),
   plan: (payload) => ipcRenderer.invoke("ai:plan", payload),
+  taskCreate: (payload) => ipcRenderer.invoke("ai:task", payload),
+  taskTrigger: (payload) => ipcRenderer.invoke("task:trigger", payload),
+  taskGet: (taskId) => ipcRenderer.invoke("task:get", taskId),
+  taskList: () => ipcRenderer.invoke("task:list"),
+  taskCancel: (taskId) => ipcRenderer.invoke("task:cancel", taskId),
+  onTaskStatus: (cb) => {
+    const h = (_e, p) => cb(p || {});
+    ipcRenderer.on("task:status", h);
+    return () => ipcRenderer.removeListener("task:status", h);
+  },
   explainFailure: (payload) => ipcRenderer.invoke("ai:explain-failure", payload),
   summarizeDiff: (payload) => ipcRenderer.invoke("ai:summarize-diff", payload),
 });

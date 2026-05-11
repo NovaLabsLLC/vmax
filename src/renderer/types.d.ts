@@ -73,6 +73,77 @@ export type VmaxPanelAction =
   | { type: "openclaw"; question: string; panel: VmaxPanelPayload }
   | { type: "run-command"; command: string };
 
+export type VmaxTaskType =
+  | "bug_fix"
+  | "feature"
+  | "refactor"
+  | "test"
+  | "investigation"
+  | "ui_change"
+  | "infra";
+
+export type VmaxTaskPriority = "low" | "medium" | "high";
+export type VmaxTaskRisk = "low" | "medium" | "high";
+export type VmaxTaskAgent = "claude_code" | "cursor" | "codex" | "manual";
+
+export type VmaxTask = {
+  id: string;
+  title: string;
+  goal: string;
+  repo: {
+    name: string;
+    path: string;
+    baseBranch: string;
+    targetBranch: string;
+  };
+  type: VmaxTaskType;
+  priority: VmaxTaskPriority;
+  filesToInspect: string[];
+  constraints: string[];
+  successCriteria: string[];
+  validationCommands: string[];
+  riskLevel: VmaxTaskRisk;
+  approvalPolicy: { requireApprovalBefore: string[] };
+  agent: { preferred: VmaxTaskAgent; reason: string };
+  outputFormat: string[];
+};
+
+export type VmaxTaskCreateResult =
+  | { ok: true; task: VmaxTask }
+  | { ok: false; task?: VmaxTask; parseWarning?: boolean; error?: string };
+
+export type VmaxTaskStatus =
+  | "created"
+  | "routed"
+  | "triggered"
+  | "running"
+  | "completed"
+  | "failed";
+
+export type VmaxTaskRunRecord = {
+  taskId: string;
+  task: VmaxTask;
+  selectedAgent: ExecAgent | null;
+  routingReason: string;
+  promptPayload: string;
+  status: VmaxTaskStatus;
+  error: string | null;
+  runId: string | null;
+  code: number | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type VmaxTaskTriggerResult = {
+  ok: boolean;
+  taskId?: string;
+  selectedAgent?: ExecAgent | null;
+  routingReason?: string;
+  status?: VmaxTaskStatus;
+  runId?: string;
+  error?: string;
+};
+
 export type ExecAgent = "claude" | "codex" | "cursor";
 export type AgentRunState = "idle" | "running" | "done" | "error";
 export type AgentStatusEvent = {
@@ -201,6 +272,12 @@ declare global {
       }>;
       createProject: (p: { name: string; parentDir?: string }) => Promise<{ ok: boolean; path: string; name: string }>;
       plan: (p: { task: string; repo: any; diff?: string; screenshotBase64?: string | null }) => Promise<Plan>;
+      taskCreate: (p: { prompt: string; repo?: any; targetBranch?: string }) => Promise<VmaxTaskCreateResult>;
+      taskTrigger: (p: { task: VmaxTask }) => Promise<VmaxTaskTriggerResult>;
+      taskGet: (taskId: string) => Promise<VmaxTaskRunRecord | null>;
+      taskList: () => Promise<VmaxTaskRunRecord[]>;
+      taskCancel: (taskId: string) => Promise<boolean>;
+      onTaskStatus: (cb: (r: VmaxTaskRunRecord) => void) => () => void;
       explainFailure: (p: { task: string; repo: any; command: string; output: string; screenshotBase64?: string | null }) => Promise<FailureExplanation>;
       summarizeDiff: (p: { diff: string }) => Promise<DiffSummary>;
     };
