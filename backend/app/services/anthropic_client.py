@@ -89,3 +89,50 @@ async def call_messages_structured(
         if text:
             parts.append(text)
     return "\n".join(parts).strip()
+
+
+async def call_messages_plaintext(
+    *,
+    system: str,
+    user: str,
+    max_tokens: int = 2500,
+    temperature: float | None = 0.35,
+    model: str | None = None,
+) -> str:
+    """Text-only replies without forcing JSON on the trailing user turn."""
+    key = _require_key()
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": [{"type": "text", "text": user}]},
+    ]
+
+    body: dict[str, Any] = {
+        "model": model or settings.anthropic_model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": messages,
+    }
+    if temperature is not None:
+        body["temperature"] = temperature
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
+        res = await client.post(
+            MESSAGES_URL,
+            headers={
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json=body,
+        )
+    if res.status_code >= 400:
+        raise HTTPException(
+            status_code=502, detail=f"Anthropic {res.status_code}: {res.text[:600]}"
+        )
+
+    payload = res.json() or {}
+    parts = []
+    for chunk in payload.get("content") or []:
+        text = chunk.get("text") if isinstance(chunk, dict) else None
+        if text:
+            parts.append(text)
+    return "\n".join(parts).strip()

@@ -39,6 +39,11 @@ from ..services.linear_client import (
     sort_my_issues,
     verify_linear_key,
 )
+from ..services.linear_agent_brief import (
+    compose_workspace_task,
+    generate_agent_brief_markdown,
+    sync_agent_brief_to_linear,
+)
 
 router = APIRouter()
 
@@ -167,6 +172,62 @@ async def patch_linear_issue(
         state=(issue.get("state") or {}).get("name") or "",
     )
     return issue
+
+
+class LinearAgentBriefBody(BaseModel):
+    workspace_bundle: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "The full Workspace task bundle (metadata + Markdown) built client-side "
+            "from Linear issue payload."
+        ),
+    )
+
+
+@router.post("/issues/{issue_id}/agent-brief")
+async def linear_issue_agent_brief(
+    issue_id: str,
+    body: LinearAgentBriefBody = Body(...),
+) -> dict[str, Any]:
+    """LLM-expand a Workspace bundle → rich agent brief + optional Linear sync.
+
+    The brief is pasted into Linear's description inside HTML markers so repeats
+    replace the prior block rather than stacking duplicates."""
+    _require_linear()
+    ident = issue_id.strip()
+    if not ident:
+        raise HTTPException(status_code=400, detail="Missing issue identifier")
+
+    try:
+        brief_md = await generate_agent_brief_markdown(body.workspace_bundle)
+    except HTTPException:
+        raise
+
+    composed = compose_workspace_task(body.workspace_bundle, brief_md)
+
+    linear_updated = False
+    linear_error: str | None = None
+    try:
+        await sync_agent_brief_to_linear(ident, brief_md)
+        linear_updated = True
+    except LinearClientError as err:
+        linear_error = str(err)
+
+    log_audit(
+        "linear_agent_brief",
+        issue_id=ident,
+        ok=True,
+        linear_updated=linear_updated,
+        error=linear_error or "",
+    )
+    out: dict[str, Any] = {
+        "task_text": composed,
+        "linear_updated": linear_updated,
+    }
+    if linear_error:
+        out["linear_error"] = linear_error
+    return out
 
 
 @router.get("/issues")

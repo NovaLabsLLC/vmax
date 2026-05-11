@@ -6,6 +6,7 @@ import {
   type FetchLinearIssuesResult,
 } from "../utils/fetchLinearIssues";
 import { formatLinearIssueAsWorkspaceTask } from "../utils/formatLinearTaskPayload";
+import { fetchLinearIssueAgentBrief } from "../utils/linearAgentBrief";
 
 type Props = {
   say: (text: string, tone?: Bubble["tone"]) => void;
@@ -26,6 +27,8 @@ export default function LinearIssuesStrip({ say, onFillTask }: Props) {
   const [loading, setLoading] = useState(true);
   /** Limit list to issues from one connected Linear workspace (`meta` ids). */
   const [workspaceFilter, setWorkspaceFilter] = useState<"all" | string>("all");
+  /** Row key while `/agent-brief` runs — disables duplicate clicks across the strip. */
+  const [busyEnrichRow, setBusyEnrichRow] = useState<string | null>(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -181,11 +184,42 @@ export default function LinearIssuesStrip({ say, onFillTask }: Props) {
               <button
                 key={key}
                 type="button"
-                className="w-full text-left px-2.5 py-1.5 hover:bg-white/[0.04] transition-colors"
-                onClick={() => {
-                  onFillTask(formatLinearIssueAsWorkspaceTask(row));
-                  say(`Loaded full Linear context for ${id}.`, "info");
-                }}
+                disabled={!!busyEnrichRow}
+                className={`w-full text-left px-2.5 py-1.5 hover:bg-white/[0.04] transition-colors disabled:opacity-40 disabled:pointer-events-none ${
+                  busyEnrichRow === key ? "bg-white/[0.03]" : ""
+                }`}
+                onClick={() => void (async () => {
+                  const base = formatLinearIssueAsWorkspaceTask(row);
+                  const ident = row.identifier?.trim();
+                  if (!ident || ident === "?") {
+                    onFillTask(base);
+                    say("This issue has no Linear identifier.", "warn");
+                    return;
+                  }
+
+                  setBusyEnrichRow(key);
+                  say(`Synthesizing agent brief for ${ident}…`, "info");
+                  try {
+                    const out = await fetchLinearIssueAgentBrief(ident, base);
+                    onFillTask(out.task_text);
+                    if (out.linear_updated)
+                      say(`Loaded brief for ${ident} and synced to Linear description.`, "success");
+                    else if (out.linear_error)
+                      say(
+                        `${ident}: brief ready; Linear wasn't updated (${out.linear_error}).`,
+                        "warn",
+                      );
+                    else say(`Loaded agent-ready brief for ${ident}.`, "success");
+                  } catch (err) {
+                    onFillTask(base);
+                    say(
+                      `Used raw Linear bundle for ${ident} (${String((err as Error)?.message || err)}).`,
+                      "warn",
+                    );
+                  } finally {
+                    setBusyEnrichRow(null);
+                  }
+                })()}
               >
                 <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0">
                   <span className="mono text-[11px] text-violet-200/95 shrink-0">{id}</span>
