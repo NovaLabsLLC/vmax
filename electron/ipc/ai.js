@@ -33,7 +33,11 @@ function register() {
   ipcMain.handle("ai:task", (_evt, payload) => {
     const prompt = String((payload && payload.prompt) || "").trim();
     if (!prompt) return { ok: false, error: "empty prompt" };
-    return createVmaxTask({ prompt });
+    const repoContextSummary = (payload && payload.repoContextSummary) || "";
+    return createVmaxTask({
+      prompt,
+      repoContextSummary: String(repoContextSummary || "").trim(),
+    });
   });
 }
 

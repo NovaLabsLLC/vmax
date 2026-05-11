@@ -126,13 +126,19 @@ async function postTask(body) {
  * @param {object} args
  * @param {string} args.prompt  User's freeform request.
  */
-async function createVmaxTask({ prompt } = {}) {
+async function createVmaxTask({ prompt, repoContextSummary } = {}) {
   const text = String(prompt || "").trim();
   if (!text) return { ok: false, error: "empty prompt" };
 
   let envelope;
   try {
-    envelope = await postTask({ prompt: text });
+    envelope = await postTask({
+      prompt: text,
+      repo_context_summary:
+        repoContextSummary && String(repoContextSummary).trim()
+          ? String(repoContextSummary).slice(0, 24_000)
+          : null,
+    });
   } catch (err) {
     // Backend down / network error / non-2xx. Return the error string
     // only — no fabricated task. The renderer reads `ok=false` + no

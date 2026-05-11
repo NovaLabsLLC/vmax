@@ -1,13 +1,16 @@
-// Vmax: trigger one agent for a VmaxTask and track the lifecycle.
+// Vmax: trigger one or more local agents for a VmaxTask and track lifecycle.
 //
 // Lifecycle: created → routed → triggered → running → completed
 //                                                  ↘ failed
 //
 // Inputs come from utils/taskSchema.js (VmaxTask). The renderer hands us a
-// validated task; we pick exactly one agent (preferring task.agent.preferred,
-// falling back to the same heuristic dispatch.js uses for raw prompts), build
-// a structured prompt payload, spawn the agent, and broadcast `task:status`
-// to every window so the UI can render selected agent / status / errors.
+// validated task; we pick agents from `payload.agents` when provided, else
+// from task.agent.preferred / dispatch heuristic, build a structured prompt
+// payload (optionally enriched with repo summary), spawn each agent, and
+// broadcast `task:status` per run window so the UI can show multiple rows.
+//
+// Runs are keyed by `runId` in memory; task:get(taskId) returns the latest run
+// for that task.id. task:cancel kills all subprocess-backed runs for a task.
 
 const path = require("path");
 const fs = require("fs");
@@ -23,13 +26,13 @@ const { CURSOR_CLIPBOARD_SAFETY_FOOTER } = require("../../utils/commandSafety.js
 const { routeAgent } = require("./dispatch.js");
 const { VmaxTaskSchema } = require("../../utils/taskSchema.js");
 
-/** In-memory store of task execution records, keyed by task.id. */
-const tasks = new Map();
+/** In-memory store keyed by runId — multiple runs may share task.id */
+const taskRuns = new Map();
 
 function now() { return Date.now(); }
 
 /**
- * Pick exactly one agent for this task.
+ * Pick exactly one agent for this task (when callers do not pass `agents`).
  *  - Prefer `task.agent.preferred` when set and not "manual".
  *  - Otherwise fall back to the same heuristic the freeform dispatcher uses.
  *  - "manual" means we should NOT trigger — the user has to act.
@@ -50,14 +53,66 @@ function pickAgent(task) {
   return { agent: fallback.agent, reason: `fallback router: ${fallback.reason}` };
 }
 
+function normalizeTriggerAgent(name) {
+  const s = String(name || "").trim().toLowerCase().replace(/-/g, "_");
+  if (s === "claude" || s === "claude_code") return "claude";
+  if (s === "codex") return "codex";
+  if (s === "cursor") return "cursor";
+  return null;
+}
+
+/**
+ * Explicit `agents: [...]` selects N local runners (deduped).
+ * Omit or empty array → single-agent pickAgent path.
+ */
+function resolveAgentDecisions(payload, task) {
+  const raw = payload && payload.agents;
+  if (Array.isArray(raw) && raw.length > 0) {
+    const out = [];
+    const seen = new Set();
+    for (const x of raw) {
+      const ag = normalizeTriggerAgent(x);
+      if (ag && !seen.has(ag)) {
+        seen.add(ag);
+        out.push({ agent: ag, reason: `requested: ${String(x)}` });
+      }
+    }
+    if (out.length > 0) return { ok: true, decisions: out };
+    return {
+      ok: false,
+      error:
+        'no valid agents in `agents[]` — use "claude", "codex", or "cursor" (or omit for automatic routing)',
+    };
+  }
+  const one = pickAgent(task);
+  if (!one.agent) return { ok: false, error: one.reason };
+  return { ok: true, decisions: [{ agent: one.agent, reason: one.reason }] };
+}
+
+function attachRepoPath(taskObj, repoPathResolved) {
+  const p = String(repoPathResolved || "").trim();
+  if (!p) return taskObj;
+  return {
+    ...taskObj,
+    repo: {
+      ...taskObj.repo,
+      path: p,
+      name: taskObj.repo.name || path.basename(p),
+    },
+  };
+}
+
 /** Render a deterministic structured prompt the agent receives verbatim. */
-function buildPromptPayload(task) {
+function buildPromptPayload(task, extras) {
+  const ext = extras && typeof extras === "object" ? extras : {};
+  const repoSummaryExtra = typeof ext.repoSummary === "string" ? ext.repoSummary.trim() : "";
   const lines = [];
   lines.push(`# Task: ${task.title}`);
   lines.push(`ID: ${task.id}`);
   lines.push(`Type: ${task.type}  •  Priority: ${task.priority}  •  Risk: ${task.riskLevel}`);
   if (task.repo && task.repo.name) {
     lines.push(`Repo: ${task.repo.name} (branch ${task.repo.targetBranch || task.repo.baseBranch || "main"})`);
+    if (task.repo.path) lines.push(`Root: ${task.repo.path}`);
   }
   lines.push("");
   lines.push("## Goal");
@@ -92,6 +147,11 @@ function buildPromptPayload(task) {
     lines.push("## STOP and ask the user before:");
     for (const a of task.approvalPolicy.requireApprovalBefore) lines.push(`- ${a}`);
   }
+  if (repoSummaryExtra) {
+    lines.push("");
+    lines.push("## Attached repository context");
+    lines.push(repoSummaryExtra);
+  }
   return lines.join("\n");
 }
 
@@ -110,6 +170,16 @@ function snapshot(rec) {
     createdAt: rec.createdAt,
     updatedAt: rec.updatedAt,
   };
+}
+
+function latestRunForTask(taskId) {
+  const tid = String(taskId || "");
+  let best = null;
+  for (const rec of taskRuns.values()) {
+    if (rec.task.id !== tid) continue;
+    if (!best || rec.updatedAt > best.updatedAt) best = rec;
+  }
+  return best;
 }
 
 function setStatus(rec, status, extra = {}) {
@@ -197,110 +267,181 @@ async function triggerCursor({ rec, repoPath, prompt }) {
   }
 }
 
+function dispatchAgent(agent, ctx) {
+  if (agent === "claude") {
+    spawnClaude(ctx);
+  } else if (agent === "codex") {
+    spawnCodex(ctx);
+  } else if (agent === "cursor") {
+    void triggerCursor(ctx);
+  } else {
+    setStatus(ctx.rec, "failed", { error: `unknown agent: ${agent}` });
+  }
+}
+
 function register() {
   ipcMain.handle("task:trigger", async (_evt, payload) => {
     const task = payload && payload.task;
-    // Validate up-front — we don't trust the renderer to give us a clean shape.
     const parsed = VmaxTaskSchema.safeParse(task);
     if (!parsed.success) {
       return {
         ok: false,
-        error: "invalid task shape: " + parsed.error.issues.map((i) => `${i.path.join(".") || "root"}: ${i.message}`).join("; "),
+        error:
+          "invalid task shape: " + parsed.error.issues.map((i) => `${i.path.join(".") || "root"}: ${i.message}`).join("; "),
       };
     }
     const clean = parsed.data;
 
-    const repoPath = (clean.repo && clean.repo.path) || readState().lastRepo || "";
-    if (!repoPath || !fs.existsSync(path.join(repoPath, ".git"))) {
+    const repoFromPayload =
+      payload && payload.repoPath !== undefined && payload.repoPath !== null
+        ? String(payload.repoPath).trim()
+        : "";
+    const repoFromTask = clean.repo && clean.repo.path ? String(clean.repo.path).trim() : "";
+    const repoPathResolved = repoFromPayload || repoFromTask || String(readState().lastRepo || "").trim();
+
+    const workingTask = attachRepoPath(clean, repoPathResolved);
+    const repoSummary =
+      (payload && payload.repoSummary !== undefined && payload.repoSummary !== null && String(payload.repoSummary).trim()) || "";
+
+    if (!repoPathResolved || !fs.existsSync(path.join(repoPathResolved, ".git"))) {
+      const runId = `task-${clean.id}-norepo-${Math.random().toString(36).slice(2, 7)}`;
       const rec = {
-        task: clean,
+        task: workingTask,
         selectedAgent: null,
         routingReason: "no repo",
         promptPayload: "",
         status: "failed",
         error: "no repo selected — pick one in the Command Center first",
-        runId: null,
+        runId,
         code: null,
         createdAt: now(),
         updatedAt: now(),
       };
-      tasks.set(clean.id, rec);
-      sendToOverlay("task:status", snapshot(rec));
-      sendToCommandCenter("task:status", snapshot(rec));
+      taskRuns.set(runId, rec);
+      setStatus(rec, "failed", { error: rec.error });
       return { ok: false, taskId: clean.id, status: "failed", error: rec.error };
     }
 
-    const rec = {
-      task: clean,
-      selectedAgent: null,
-      routingReason: "",
-      promptPayload: "",
-      status: "created",
-      error: null,
-      runId: `task-${clean.id}-${Math.random().toString(36).slice(2, 7)}`,
-      code: null,
-      createdAt: now(),
-      updatedAt: now(),
-    };
-    tasks.set(clean.id, rec);
-    setStatus(rec, "created");
-
-    const { agent, reason } = pickAgent(clean);
-    rec.selectedAgent = agent;
-    rec.routingReason = reason;
-
-    if (!agent) {
-      // task.agent.preferred === "manual" → don't fire anything. UI still gets
-      // a useful state to render the "needs manual" card.
-      setStatus(rec, "failed", { error: reason });
-      return { ok: false, taskId: clean.id, status: "failed", selectedAgent: null, routingReason: reason, error: reason };
+    const resolved = resolveAgentDecisions(payload, workingTask);
+    if (!resolved.ok) {
+      const runId = `task-${workingTask.id}-noroute-${Math.random().toString(36).slice(2, 7)}`;
+      const rec = {
+        task: workingTask,
+        selectedAgent: null,
+        routingReason: "no agent",
+        promptPayload: "",
+        status: "failed",
+        error: resolved.error,
+        runId,
+        code: null,
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      taskRuns.set(runId, rec);
+      setStatus(rec, "failed", { error: resolved.error });
+      return {
+        ok: false,
+        taskId: workingTask.id,
+        status: "failed",
+        selectedAgent: null,
+        routingReason: resolved.error,
+        error: resolved.error,
+        runs: [{ runId, selectedAgent: null, routingReason: resolved.error, status: "failed" }],
+      };
     }
 
-    rec.promptPayload = buildPromptPayload(clean);
-    setStatus(rec, "routed");
+    const promptPayload = buildPromptPayload(workingTask, { repoSummary });
 
-    try {
-      if (agent === "claude") {
-        spawnClaude({ rec, repoPath, prompt: rec.promptPayload });
-      } else if (agent === "codex") {
-        spawnCodex({ rec, repoPath, prompt: rec.promptPayload });
-      } else if (agent === "cursor") {
-        // Cursor is async (applescript paste); status flows through setStatus there.
-        void triggerCursor({ rec, repoPath, prompt: rec.promptPayload });
-      } else {
-        setStatus(rec, "failed", { error: `unknown agent: ${agent}` });
-        return { ok: false, taskId: clean.id, status: "failed", error: `unknown agent: ${agent}` };
-      }
-      setStatus(rec, "triggered");
-      return {
-        ok: true,
-        taskId: clean.id,
+    /** @type {{ runId: string; selectedAgent: string | null; routingReason: string; status: string }[]} */
+    const runsOut = [];
+    let lastErr;
+
+    for (const { agent, reason } of resolved.decisions) {
+      const runId = `task-${workingTask.id}-${agent}-${Math.random().toString(36).slice(2, 7)}`;
+      const rec = {
+        task: workingTask,
         selectedAgent: agent,
         routingReason: reason,
-        status: rec.status,
-        runId: rec.runId,
+        promptPayload,
+        status: "created",
+        error: null,
+        runId,
+        code: null,
+        createdAt: now(),
+        updatedAt: now(),
       };
-    } catch (err) {
-      const msg = String((err && err.message) || err);
-      setStatus(rec, "failed", { error: msg });
-      return { ok: false, taskId: clean.id, status: "failed", selectedAgent: agent, routingReason: reason, error: msg };
+      taskRuns.set(runId, rec);
+      setStatus(rec, "created");
+      setStatus(rec, "routed");
+
+      try {
+        if (!["claude", "codex", "cursor"].includes(agent)) {
+          setStatus(rec, "failed", { error: `unknown agent: ${agent}` });
+          runsOut.push({ runId: rec.runId, selectedAgent: agent, routingReason: reason, status: rec.status });
+          lastErr = lastErr || `unknown agent: ${agent}`;
+          continue;
+        }
+        dispatchAgent(agent, { rec, repoPath: repoPathResolved, prompt: promptPayload });
+        setStatus(rec, "triggered");
+        runsOut.push({
+          runId: rec.runId,
+          selectedAgent: agent,
+          routingReason: reason,
+          status: rec.status,
+        });
+      } catch (err) {
+        const msg = String((err && err.message) || err);
+        setStatus(rec, "failed", { error: msg });
+        runsOut.push({
+          runId: rec.runId,
+          selectedAgent: agent,
+          routingReason: reason,
+          status: "failed",
+        });
+        lastErr = lastErr || msg;
+      }
     }
+
+    const first = resolved.decisions[0];
+    const multi = resolved.decisions.length > 1;
+    const ok = runsOut.some((r) => r.status === "triggered");
+    return {
+      ok,
+      taskId: workingTask.id,
+      selectedAgent: multi ? null : first.agent,
+      routingReason: multi ? `parallel: ${resolved.decisions.map((d) => d.agent).join(", ")}` : first.reason,
+      status: ok ? "triggered" : "failed",
+      runId: runsOut[0]?.runId,
+      runs: runsOut,
+      error: ok ? undefined : (lastErr || "no agents started"),
+    };
   });
 
   ipcMain.handle("task:get", (_evt, taskId) => {
-    const rec = tasks.get(String(taskId || ""));
+    const rec = latestRunForTask(String(taskId || ""));
     return rec ? snapshot(rec) : null;
   });
 
-  ipcMain.handle("task:list", () => Array.from(tasks.values()).map(snapshot));
+  ipcMain.handle("task:list", () =>
+    Array.from(taskRuns.values())
+      .map(snapshot)
+      .sort((a, b) => b.updatedAt - a.updatedAt),
+  );
 
   ipcMain.handle("task:cancel", (_evt, taskId) => {
-    const rec = tasks.get(String(taskId || ""));
-    if (!rec || !rec.runId) return false;
-    const child = runners.get(rec.runId);
-    if (!child) return false;
-    child.kill("SIGTERM");
-    return true;
+    const tid = String(taskId || "").trim();
+    if (!tid) return false;
+    let killed = false;
+    for (const rec of taskRuns.values()) {
+      if (rec.task.id !== tid) continue;
+      if (!rec.runId) continue;
+      const child = runners.get(rec.runId);
+      if (child) {
+        child.kill("SIGTERM");
+        killed = true;
+      }
+    }
+    return killed;
   });
 }
 

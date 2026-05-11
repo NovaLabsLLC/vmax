@@ -107,14 +107,16 @@ class VmaxTask(BaseModel):
 class TaskRequest(BaseModel):
     """POST /v1/task body.
 
-    The backend is intentionally repo-agnostic — only the user's prompt
-    is sent. The Electron host fills in the actual repo path from its
-    own state when triggering the agent.
+    The Electron host fills in the runtime repo path when triggering.
+    Optionally ``repo_context_summary`` attaches a deterministic git
+    snapshot (branch / changed paths / ``diff --stat``) so the planner
+    can steer ``files_to_inspect`` correctly.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     prompt: str = Field(min_length=1)
+    repo_context_summary: str | None = None
 
 
 class TaskResponse(BaseModel):

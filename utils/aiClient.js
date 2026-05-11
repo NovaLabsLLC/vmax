@@ -181,13 +181,16 @@ function formatAskChatText(d) {
 
 // ---- Public API (matches the previous module exports 1:1) ----
 
-async function planTask({ task, diff, screenshotBase64 }) {
-  // Repo intentionally not sent — the backend is repo-agnostic, so all
-  // grounding has to live in `task` + `diff` themselves.
+async function planTask({ task, diff, screenshotBase64, repoContextSummary }) {
+  // Optional git snapshot improves plans when diff alone is incomplete.
   const env = await requestJson("/v1/plan", {
     task: task || "",
     diff: diff || null,
     screenshot_base64: screenshotBase64 || null,
+    repo_context_summary:
+      repoContextSummary && String(repoContextSummary).trim()
+        ? String(repoContextSummary).slice(0, 24_000)
+        : null,
   });
   const data = normalizeStructured(env.structured);
   const plan = structuredToPlan(data);
@@ -200,13 +203,18 @@ async function explainFailure({
   command,
   output,
   screenshotBase64,
+  repoContextSummary,
 }) {
-  // Repo intentionally not sent — see planTask above.
+  // Optional repo snapshot gives the model anchors for likely files.
   const env = await requestJson("/v1/explain-failure", {
     task: task || "",
     command: command || "",
     output: output || "",
     screenshot_base64: screenshotBase64 || null,
+    repo_context_summary:
+      repoContextSummary && String(repoContextSummary).trim()
+        ? String(repoContextSummary).slice(0, 24_000)
+        : null,
   });
   const data = normalizeStructured(env.structured);
   const out = structuredToFailure(data);
@@ -244,7 +252,12 @@ async function summarizeDiff({ diff, fallback }) {
   return out;
 }
 
-async function askAssistant({ question, screenshotBase64, history }) {
+async function askAssistant({
+  question,
+  screenshotBase64,
+  history,
+  repoContextSummary,
+}) {
   const cleanedHistory = Array.isArray(history)
     ? history
         .filter((m) => m && m.text)
@@ -254,11 +267,14 @@ async function askAssistant({ question, screenshotBase64, history }) {
         }))
     : [];
 
-  // Repo intentionally not sent — the backend is repo-agnostic.
   const env = await requestJson("/v1/ask", {
     question: String(question || ""),
     screenshot_base64: screenshotBase64 || null,
     history: cleanedHistory,
+    repo_context_summary:
+      repoContextSummary && String(repoContextSummary).trim()
+        ? String(repoContextSummary).slice(0, 24_000)
+        : null,
   });
 
   const data = normalizeStructured(env.structured);

@@ -58,6 +58,7 @@ router = APIRouter()
 
 OUTPUT_TRUNCATE_CHARS = 8_000
 DIFF_TRUNCATE_CHARS = 30_000
+REPO_CONTEXT_CHARS = 12_000
 
 
 MY_ISSUES_FETCH_LIMIT = 25
@@ -263,11 +264,16 @@ async def ask(body: AskRequest) -> StructuredEnvelope:
         "meta question)."
         if meta
         else "Context: general developer Q&A. Do not assume the user has a "
-        "specific repo open."
+        "specific repo open unless a repository snapshot is attached below."
     )
+    repo_blob = ""
+    raw_repo = body.repo_context_summary
+    if (raw_repo or "").strip() and not meta:
+        repo_blob = "\n--- Attached repository snapshot ---\n"
+        repo_blob += (raw_repo or "").strip()[:REPO_CONTEXT_CHARS]
 
     system_body = ASK_META_SYSTEM if meta else ASK_STRUCTURED_SYSTEM
-    system_with_context = f"{system_body}\n\n--- Live context ---\n{context_block}"
+    system_with_context = f"{system_body}\n\n--- Live context ---\n{context_block}{repo_blob}"
 
     turns: list[HistoryTurn] = []
     if not meta:
@@ -320,6 +326,11 @@ async def plan(body: PlanRequest) -> StructuredEnvelope:
     lines: list[str] = []
     if body.task:
         lines.append(f"Task:\n{body.task}")
+    if (body.repo_context_summary or "").strip():
+        lines.append(
+            f"\n--- repository snapshot ---\n"
+            f"{(body.repo_context_summary or '').strip()[:REPO_CONTEXT_CHARS]}"
+        )
     if body.diff:
         lines.append(f"\n--- diff (truncated) ---\n{body.diff[:DIFF_TRUNCATE_CHARS]}")
     user = "\n".join(lines) if lines else "(no task description provided)"
@@ -336,8 +347,14 @@ async def plan(body: PlanRequest) -> StructuredEnvelope:
 @router.post("/explain-failure", response_model=StructuredEnvelope)
 async def explain_failure(body: ExplainFailureRequest) -> StructuredEnvelope:
     head = f"Task:\n{body.task}\n\n" if body.task else ""
+    extra = ""
+    if (body.repo_context_summary or "").strip():
+        extra = (
+            f"\n--- repository snapshot ---\n"
+            f"{body.repo_context_summary.strip()[:REPO_CONTEXT_CHARS]}\n\n"
+        )
     user = (
-        f"{head}Command: {body.command}\n\n"
+        f"{head}{extra}Command: {body.command}\n\n"
         f"--- Output (last {OUTPUT_TRUNCATE_CHARS} chars) ---\n"
         f"{(body.output or '')[-OUTPUT_TRUNCATE_CHARS:]}"
     )

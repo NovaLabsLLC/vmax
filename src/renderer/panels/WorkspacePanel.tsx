@@ -3,14 +3,17 @@ import RepoStrip from "../components/RepoStrip";
 import ActivityBar, { Activity } from "../components/ActivityBar";
 import MessageThread, { Msg } from "../components/MessageThread";
 import TaskPanel from "../components/TaskPanel";
+import AskFolderContextBar from "../components/AskFolderContextBar";
+import LinearIssuesStrip from "../components/LinearIssuesStrip";
 import CommandCards from "../components/CommandCards";
 import ResultPanel from "../components/ResultPanel";
 import Terminal from "../components/Terminal";
 import TalkBack, { Bubble } from "../components/TalkBack";
-import type { RepoContext, Plan, FailureExplanation, DiffSummary, VmaxPanelAction } from "../types";
+import type { RepoContext, Plan, FailureExplanation, DiffSummary, VmaxPanelAction, ExecAgent } from "../types";
 import { buildOpenClawAgentMessage, buildOpenClawFromAskPanel } from "../utils/openClawPrompt";
 import { buildOpenClawSpeakable, deriveSpeakable, proseToSpeakable, toSpeakableLine } from "../utils/talkBackText";
 import { subscribeSettingsUpdated } from "../utils/subscribeSettingsUpdated";
+import { formatRepoContextSummary } from "../utils/repoContextSummary";
 
 type ResultKind = "idle" | "plan" | "failure" | "diff";
 type TermLine = { stream: "stdout" | "stderr" | "meta"; text: string };
@@ -48,6 +51,7 @@ export default function WorkspacePanel({
   const [starting, setStarting] = useState(false);
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [repo, setRepo] = useState<RepoContext | null>(null);
+  const repoContextSummary = useMemo(() => formatRepoContextSummary(repo), [repo]);
 
   // task + AI results
   const [task, setTask] = useState("");
@@ -88,6 +92,17 @@ export default function WorkspacePanel({
   const [askPending, setAskPending] = useState(false);
   /** Bumps TaskPanel to start listening after assistant asks for confirmation. */
   const [micArmToken, setMicArmToken] = useState(0);
+  const [structuredAgents, setStructuredAgents] = useState<Record<ExecAgent, boolean>>({
+    claude: true,
+    codex: false,
+    cursor: false,
+  });
+  const [structuredTaskBusy, setStructuredTaskBusy] = useState(false);
+  /** Explicit folder for Ask (overrides workspace `repoContextSummary` while set). */
+  const [askAttachPath, setAskAttachPath] = useState<string | null>(null);
+  const [askAttachName, setAskAttachName] = useState<string | null>(null);
+  const [askAttachSummary, setAskAttachSummary] = useState("");
+  const [askAttachBusy, setAskAttachBusy] = useState(false);
   const messagesRef = useRef<Msg[]>([]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
@@ -564,6 +579,34 @@ export default function WorkspacePanel({
     return s;
   }
 
+  /** Native folder picker + scan for bounded `repoContextSummary` on Ask only. */
+  async function pickAskContextFolder() {
+    setAskAttachBusy(true);
+    try {
+      const p = await window.exec.pickRepo();
+      if (!p) return;
+      const ctx = await window.exec.scanRepo(p);
+      if (!ctx.ok) {
+        say(`${ctx.error} — choose a folder that contains a git repository.`, "warn");
+        return;
+      }
+      setAskAttachPath(p);
+      setAskAttachName(ctx.name);
+      setAskAttachSummary(formatRepoContextSummary(ctx));
+      say(`Ask will use git context from ${ctx.name}.`, "success");
+    } catch (err) {
+      say(`Could not attach folder: ${(err as Error).message}`, "warn");
+    } finally {
+      setAskAttachBusy(false);
+    }
+  }
+
+  function clearAskContextFolder() {
+    setAskAttachPath(null);
+    setAskAttachName(null);
+    setAskAttachSummary("");
+  }
+
   // ---- general Ask (screen-aware, repo-optional) ----
   async function runAsk(question: string) {
     const q = (question || "").trim();
@@ -607,12 +650,14 @@ export default function WorkspacePanel({
       if (typeof window.exec.setOverlayExpanded === "function") {
         void window.exec.setOverlayExpanded(true);
       }
-      // Repo context intentionally NOT sent — the model was hallucinating
-      // about untracked files when users asked unrelated questions.
+      const askSummary =
+        (askAttachSummary && askAttachSummary.trim()) ||
+        (repo?.ok && repoContextSummary ? repoContextSummary : "");
       const res = await window.exec.ask({
         question: q,
         screenshotBase64,
         history: messagesRef.current.slice(-6),
+        ...(askSummary.trim() ? { repoContextSummary: askSummary.trim() } : {}),
       });
       const { prose, action } = parseActionTag(res.text);
       setMessages((prev) => [...prev, { role: "assistant", text: prose, ts: Date.now() }]);
@@ -763,7 +808,7 @@ export default function WorkspacePanel({
       const diff = await getDiffText();
       bumpActivityLabel("Calling AI (Claude / OpenAI)…");
       const screenshotBase64 = getScreenshot?.() || null;
-      const result = await window.exec.plan({ task: t, repo, diff, screenshotBase64 });
+      const result = await window.exec.plan({ task: t, repo, diff, screenshotBase64, repoContextSummary });
       setPlan(result);
       endActivity({ tone: "ok", text: "Plan ready" });
       say("Plan ready. Cursor prompt is queued.", "success");
@@ -799,7 +844,14 @@ export default function WorkspacePanel({
     beginActivity("failure", `Explaining ${command} failure…`);
     try {
       const screenshotBase64 = getScreenshot?.() || null;
-      const result = await window.exec.explainFailure({ task, repo, command, output, screenshotBase64 });
+      const result = await window.exec.explainFailure({
+        task,
+        repo,
+        command,
+        output,
+        screenshotBase64,
+        repoContextSummary,
+      });
       setFailure(result);
       endActivity({ tone: "ok", text: "Diagnosis ready" });
       say("I have a guess — see the explanation above.", "success");
@@ -822,6 +874,68 @@ export default function WorkspacePanel({
       endActivity({ tone: "err", text: "Explain failed" });
       say(`Explain failed: ${(err as Error).message}`, "warn"); setResultKind("idle");
     } finally { setResultLoading(false); }
+  }
+
+  async function runStructuredShip() {
+    const t = (taskRef.current ?? task).trim();
+    if (!repo?.ok || !repoPath) {
+      say("Start Vmax on a repo first so we can attach paths and git context.", "warn");
+      return;
+    }
+    if (!t) {
+      say("Describe the task in the box above first.", "warn");
+      return;
+    }
+    const agents: ExecAgent[] = [];
+    if (structuredAgents.claude) agents.push("claude");
+    if (structuredAgents.codex) agents.push("codex");
+    if (structuredAgents.cursor) agents.push("cursor");
+    if (!agents.length) {
+      say("Pick at least one agent — Claude Code, Codex, or Cursor.", "warn");
+      return;
+    }
+    setStructuredTaskBusy(true);
+    beginActivity("plan", "Structured task…");
+    try {
+      bumpActivityLabel("Creating task schema…");
+      const summary = repoContextSummary;
+      const created = await window.exec.taskCreate({ prompt: t, repoContextSummary: summary });
+      if (!created.ok) {
+        say(created.error || "Could not create a structured task.", "warn");
+        endActivity({ tone: "err", text: "Task create failed" });
+        return;
+      }
+      if (!created.task) {
+        say("Structured task payload was incomplete — try again.", "warn");
+        endActivity({ tone: "err", text: "Task create failed" });
+        return;
+      }
+      bumpActivityLabel(`Dispatching to ${agents.length} agent${agents.length === 1 ? "" : "s"}…`);
+      const trig = await window.exec.taskTrigger({
+        task: created.task,
+        agents,
+        repoPath,
+        repoSummary: summary || undefined,
+      });
+      if (trig.ok) {
+        say(
+          agents.length > 1
+            ? `Structured task dispatched to ${agents.join(", ")} — check overlays for status.`
+            : `Structured task dispatched to ${agents[0]}.`,
+          "success",
+        );
+        endActivity({ tone: "ok", text: "Agents started" });
+      } else {
+        say(trig.error || "Could not dispatch to agents.", "warn");
+        endActivity({ tone: "err", text: "Dispatch failed" });
+      }
+    } catch (err) {
+      const msg = `Structured task failed: ${(err as Error).message}`;
+      say(msg, "warn");
+      endActivity({ tone: "err", text: "Structured task failed" });
+    } finally {
+      setStructuredTaskBusy(false);
+    }
   }
 
   // ---- terminal ----
@@ -1040,7 +1154,7 @@ export default function WorkspacePanel({
   }, []);
 
   return (
-    <div className="max-w-[820px] mx-auto px-6 pt-6 pb-12 space-y-3">
+    <div className="w-full max-w-none box-border px-4 sm:px-6 lg:px-8 pt-6 pb-12 space-y-3">
       {/* Header */}
       <div className="flex items-center gap-3 mb-1">
         <div>
@@ -1100,6 +1214,48 @@ export default function WorkspacePanel({
 
       <ActivityBar activity={activity} resultFlash={lastResultStatus} />
 
+      <LinearIssuesStrip say={say} onFillTask={setTask} />
+
+      {active && (
+        <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-3 space-y-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            <span className="text-[10.5px] font-semibold uppercase tracking-wide text-white/45">
+              Structured task → agents
+            </span>
+            {(["claude", "codex", "cursor"] as const).map((key) => (
+              <label
+                key={key}
+                className="inline-flex items-center gap-1.5 text-[11px] text-white/80 cursor-pointer select-none"
+              >
+                <input
+                  type="checkbox"
+                  className="rounded border-white/25 bg-transparent"
+                  checked={structuredAgents[key]}
+                  disabled={structuredTaskBusy}
+                  onChange={(e) =>
+                    setStructuredAgents((prev) => ({ ...prev, [key]: e.target.checked }))
+                  }
+                />
+                {key === "claude" ? "Claude Code" : key === "codex" ? "Codex" : "Cursor"}
+              </label>
+            ))}
+          </div>
+          <p className="text-[11px] text-white/48 leading-snug">
+            Uses the description above plus a git snapshot in the backend task and agent prompts. Multiple selections run in parallel locally.
+          </p>
+          <button
+            type="button"
+            disabled={
+              structuredTaskBusy || !!(askPending || resultLoading) || !repoPath || starting
+            }
+            onClick={() => void runStructuredShip()}
+            className="text-[11px] px-3 h-[26px] rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/35 text-emerald-100 disabled:opacity-40 disabled:pointer-events-none"
+          >
+            {structuredTaskBusy ? "Working…" : "Create structured task → selected agents"}
+          </button>
+        </div>
+      )}
+
       {loopUI.active && (
         <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/[0.06] px-3 py-1.5 flex items-center gap-2">
           <span className="relative flex">
@@ -1133,6 +1289,15 @@ export default function WorkspacePanel({
         sending={askPending || resultLoading}
         disabled={false}
         micArmToken={micArmToken}
+      />
+
+      <AskFolderContextBar
+        attachedPath={askAttachPath}
+        repoName={askAttachName}
+        picking={askAttachBusy}
+        freeze={!!(askPending || resultLoading)}
+        onPickFolder={pickAskContextFolder}
+        onClear={clearAskContextFolder}
       />
 
       <MessageThread messages={messages} pending={askPending} />

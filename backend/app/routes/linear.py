@@ -31,10 +31,12 @@ from ..logging_setup import log_audit
 from ..services import linear_workspaces
 from ..services.linear_client import (
     LinearClientError,
+    get_all_my_open_issues_with_key,
     get_linear_issue,
     get_my_linear_issues,
     get_my_open_issues_with_key,
     linear_update_issue,
+    sort_my_issues,
     verify_linear_key,
 )
 
@@ -170,6 +172,13 @@ async def patch_linear_issue(
 @router.get("/issues")
 async def list_my_linear_issues(
     limit: int = Query(default=25, ge=1, le=100),
+    fetch_all: bool = Query(
+        default=False,
+        description=(
+            "Paginate through assigned issues and return every **open** ticket "
+            "(capped server-side). Ignores ``limit`` when true."
+        ),
+    ),
 ) -> dict[str, Any]:
     """Fan out across every saved workspace. Falls back to the legacy
     env-key path when no workspaces are stored, so existing setups keep
@@ -182,18 +191,37 @@ async def list_my_linear_issues(
     # callers that don't know about multi-workspace still work.
     if len(workspaces) == 1 and workspaces[0].id == "legacy":
         try:
-            issues = await get_my_linear_issues(limit=limit)
+            if fetch_all:
+                key = (workspaces[0].key or "").strip()
+                if not key:
+                    raise LinearClientError("legacy workspace has no API key")
+                issues = await get_all_my_open_issues_with_key(key)
+            else:
+                issues = await get_my_linear_issues(limit=limit)
         except LinearClientError as err:
             log_audit("linear_my_issues", ok=False, error=str(err))
             raise HTTPException(status_code=502, detail=str(err))
-        log_audit("linear_my_issues", ok=True, count=len(issues), limit=limit)
+        issues = sort_my_issues(issues)
+        log_audit(
+            "linear_my_issues",
+            ok=True,
+            count=len(issues),
+            fetch_all=fetch_all,
+            limit=(None if fetch_all else limit),
+        )
         return {"issues": issues, "count": len(issues), "workspaces": [], "errors": []}
 
     async def fetch(ws: linear_workspaces.LinearWorkspace) -> tuple[
         linear_workspaces.LinearWorkspace, list[dict[str, Any]] | LinearClientError
     ]:
         try:
-            issues = await get_my_open_issues_with_key(ws.key, limit=limit)
+            api_key = (ws.key or "").strip()
+            if not api_key:
+                return ws, LinearClientError("Linear API key is empty")
+            if fetch_all:
+                issues = await get_all_my_open_issues_with_key(api_key)
+            else:
+                issues = await get_my_open_issues_with_key(api_key, limit=limit)
             return ws, issues
         except LinearClientError as err:
             return ws, err
@@ -222,13 +250,16 @@ async def list_my_linear_issues(
             }
         )
 
+    merged = sort_my_issues(merged)
+
     log_audit(
         "linear_my_issues",
         ok=True,
         count=len(merged),
         workspaces=len(per_workspace),
         errors=len(errors),
-        limit=limit,
+        limit=(None if fetch_all else limit),
+        fetch_all=fetch_all,
     )
     return {
         "issues": merged,

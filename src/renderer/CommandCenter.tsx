@@ -1,13 +1,21 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import type { VmaxPanelAction } from "./types";
 import AgentsPanel from "./panels/AgentsPanel";
 import SettingsPanel from "./panels/SettingsPanel";
+import WorkspacePanel from "./panels/WorkspacePanel";
 import Onboarding from "./onboarding/Onboarding";
 
-type CcPage = "settings" | "agents";
+type CcPage = "settings" | "agents" | "workspace";
 
 export default function CommandCenter() {
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
   const [page, setPage] = useState<CcPage>("settings");
+
+  /** Filled when Workspace mounts; cleared on unmount. Kept wired by leaving Workspace mounted (hidden tab). */
+  const vmaxDispatcherRef = useRef<((action: VmaxPanelAction) => void) | null>(null);
+
+  /** Voice routed from overlay → forwarded to Workspace Ask (epoch bumps effect). */
+  const [voiceFromPill, setVoiceFromPill] = useState<{ text: string; epoch: number } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -16,14 +24,27 @@ export default function CommandCenter() {
   }, []);
 
   useEffect(() => {
-    const off = window.exec.onCcNavigate((p) => {
+    const offNav = window.exec.onCcNavigate((p) => {
       const v = p?.view;
       if (v === "agents") setPage("agents");
-      else if (v === "settings" || v === "home" || v === "workspace" || v === "chats" || v === "profile" || v === "help") {
-        setPage("settings");
-      }
+      else if (v === "workspace" || v === "home") setPage("workspace");
+      else if (v === "settings" || v === "chats" || v === "profile" || v === "help") setPage("settings");
     });
-    return () => off();
+    const offVm = window.exec.onVmaxPanelAction((action) => {
+      setPage("workspace");
+      window.setTimeout(() => vmaxDispatcherRef.current?.(action), 0);
+    });
+    const offVoice = window.exec.onPillVoiceQuestion((text) => {
+      const t = String(text || "").trim();
+      if (!t) return;
+      setPage("workspace");
+      setVoiceFromPill({ text: t, epoch: Date.now() });
+    });
+    return () => {
+      offNav();
+      offVm();
+      offVoice();
+    };
   }, []);
 
   if (onboarded === null) return null;
@@ -31,26 +52,46 @@ export default function CommandCenter() {
     return <Onboarding onDone={() => setOnboarded(true)} />;
   }
 
-  const title = page === "agents" ? "Agents" : "Settings";
-
   return (
-    <div className="h-full flex flex-col bg-[#08080a] text-[#e6e6ea]">
-      <div className="drag h-11 shrink-0 border-b border-white/[0.05] flex items-center pl-[80px] pr-3 gap-3">
-        <div className="text-[12.5px] font-semibold tracking-tight text-white/85 truncate min-w-0">
-          Vmax · {title}
+    <div className="h-full flex flex-col min-h-0 bg-[#08080a] text-[#e6e6ea]">
+      {/* hiddenInset title bar — drag strip only (traffic lights use the left inset). */}
+      <div className="drag h-9 shrink-0 w-full" aria-hidden />
+
+      <div className="flex-1 min-h-0 overflow-hidden relative">
+        {/*
+          Keep Workspace mounted while Command Center runs so vmax overlay handoffs and executor ref stay valid.
+          Other tabs hide via invisible / inert wrappers.
+        */}
+        <div className={`h-full min-h-0 overflow-y-auto absolute inset-0 ${page !== "settings" ? "hidden" : ""}`}>
+          <SettingsPanel />
         </div>
-        <nav className="no-drag flex items-center gap-1 ml-1">
+        <div className={`h-full min-h-0 overflow-y-auto absolute inset-0 ${page !== "agents" ? "hidden" : ""}`}>
+          <AgentsPanel onGoSettings={() => setPage("settings")} />
+        </div>
+        <div className={`h-full min-h-0 overflow-y-auto absolute inset-0 ${page !== "workspace" ? "hidden" : ""}`}>
+          <WorkspacePanel
+            pendingVoiceQuestion={voiceFromPill}
+            onConsumeVoiceQuestion={() => setVoiceFromPill(null)}
+            registerVmaxPanelExecutor={(dispatcher) => {
+              vmaxDispatcherRef.current = dispatcher;
+            }}
+          />
+        </div>
+      </div>
+
+      <footer className="shrink-0 z-20 w-full flex justify-center border-t border-white/[0.08] bg-[#08080a] py-2.5 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))]">
+        <nav className="no-drag flex items-center justify-center gap-1.5 flex-wrap">
           <NavPill active={page === "settings"} onClick={() => setPage("settings")}>
             Settings
           </NavPill>
           <NavPill active={page === "agents"} onClick={() => setPage("agents")}>
             Agents
           </NavPill>
+          <NavPill active={page === "workspace"} onClick={() => setPage("workspace")}>
+            Workspace
+          </NavPill>
         </nav>
-      </div>
-      <div className="flex-1 overflow-y-auto">
-        {page === "settings" ? <SettingsPanel /> : <AgentsPanel onGoSettings={() => setPage("settings")} />}
-      </div>
+      </footer>
     </div>
   );
 }

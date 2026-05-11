@@ -238,7 +238,11 @@ async def _call_fast_llm(*, system: str, user: str) -> str:
     )
 
 
-async def create_task(*, prompt: str) -> TaskResult:
+async def create_task(
+    *,
+    prompt: str,
+    repo_context_summary: str | None = None,
+) -> TaskResult:
     """Create a strict VmaxTask from a user prompt.
 
     No repo snapshot is sent — the server doesn't know which repo the
@@ -254,7 +258,15 @@ async def create_task(*, prompt: str) -> TaskResult:
     if not text:
         return TaskResult(False, None, False, "empty prompt")
 
-    user = f"User request:\n{text[:4000]}"
+    chunks: list[str] = []
+    ctx = (repo_context_summary or "").strip()
+    if ctx:
+        chunks.append(
+            "Attached git snapshot (trusted for branches / paths / churn):\n"
+            f"{ctx[:8000]}"
+        )
+    chunks.append(f"User request:\n{text[:4000]}")
+    user = "\n\n".join(chunks)
 
     try:
         raw = await _call_fast_llm(system=SYSTEM_PROMPT, user=user)

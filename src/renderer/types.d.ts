@@ -146,6 +146,13 @@ export type VmaxTaskRunRecord = {
   updatedAt: number;
 };
 
+export type VmaxTaskTriggerRunBrief = {
+  runId?: string | null;
+  selectedAgent?: ExecAgent | null;
+  routingReason?: string;
+  status?: VmaxTaskStatus;
+};
+
 export type VmaxTaskTriggerResult = {
   ok: boolean;
   taskId?: string;
@@ -153,6 +160,7 @@ export type VmaxTaskTriggerResult = {
   routingReason?: string;
   status?: VmaxTaskStatus;
   runId?: string;
+  runs?: VmaxTaskTriggerRunBrief[];
   error?: string;
 };
 
@@ -293,20 +301,44 @@ declare global {
 
       transcribe: (p: { audioBase64: string; mimeType: string }) => Promise<{ text: string }>;
       tts: (p: { text: string; voice?: string; instructions?: string }) => Promise<{ audioBase64: string; mimeType: string }>;
-      ask: (p: { question: string; screenshotBase64?: string | null; repo?: any; history?: { role: "user" | "assistant"; text: string }[] }) => Promise<{
+      ask: (p: {
+        question: string;
+        screenshotBase64?: string | null;
+        repo?: any;
+        repoContextSummary?: string | null;
+        history?: { role: "user" | "assistant"; text: string }[];
+      }) => Promise<{
         text: string;
         structured: VmaxPanelPayload;
         parseWarning: boolean;
       }>;
       createProject: (p: { name: string; parentDir?: string }) => Promise<{ ok: boolean; path: string; name: string }>;
-      plan: (p: { task: string; repo: any; diff?: string; screenshotBase64?: string | null }) => Promise<Plan>;
-      taskCreate: (p: { prompt: string; repo?: any; targetBranch?: string }) => Promise<VmaxTaskCreateResult>;
-      taskTrigger: (p: { task: VmaxTask }) => Promise<VmaxTaskTriggerResult>;
+      plan: (p: {
+        task: string;
+        repo: any;
+        diff?: string;
+        screenshotBase64?: string | null;
+        repoContextSummary?: string | null;
+      }) => Promise<Plan>;
+      taskCreate: (p: { prompt: string; repo?: any; targetBranch?: string; repoContextSummary?: string | null }) => Promise<VmaxTaskCreateResult>;
+      taskTrigger: (p: {
+        task: VmaxTask;
+        agents?: ExecAgent[];
+        repoPath?: string | null;
+        repoSummary?: string | null;
+      }) => Promise<VmaxTaskTriggerResult>;
       taskGet: (taskId: string) => Promise<VmaxTaskRunRecord | null>;
       taskList: () => Promise<VmaxTaskRunRecord[]>;
       taskCancel: (taskId: string) => Promise<boolean>;
       onTaskStatus: (cb: (r: VmaxTaskRunRecord) => void) => () => void;
-      explainFailure: (p: { task: string; repo: any; command: string; output: string; screenshotBase64?: string | null }) => Promise<FailureExplanation>;
+      explainFailure: (p: {
+        task: string;
+        repo: any;
+        command: string;
+        output: string;
+        screenshotBase64?: string | null;
+        repoContextSummary?: string | null;
+      }) => Promise<FailureExplanation>;
       summarizeDiff: (p: { diff: string }) => Promise<DiffSummary>;
     };
   }

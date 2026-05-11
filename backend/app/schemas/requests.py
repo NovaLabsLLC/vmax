@@ -33,6 +33,7 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=1)
     screenshot_base64: str | None = None
     history: list[HistoryTurn] = Field(default_factory=list)
+    repo_context_summary: str | None = None
 
 
 class PlanRequest(BaseModel):
@@ -41,6 +42,7 @@ class PlanRequest(BaseModel):
     task: str = ""
     diff: str | None = None
     screenshot_base64: str | None = None
+    repo_context_summary: str | None = None
 
 
 class ExplainFailureRequest(BaseModel):
@@ -50,6 +52,7 @@ class ExplainFailureRequest(BaseModel):
     command: str = ""
     output: str = ""
     screenshot_base64: str | None = None
+    repo_context_summary: str | None = None
 
 
 class SummarizeDiffRequest(BaseModel):

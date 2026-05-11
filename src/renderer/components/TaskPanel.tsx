@@ -182,6 +182,9 @@ export default function TaskPanel({
 
   const micActive = audio.isCapturing();
 
+  /** Taller textarea when pasted content has many logical lines (e.g. Linear import). */
+  const textareaRows = Math.min(24, Math.max(2, (task.match(/\n/g)?.length ?? 0) + 1));
+
   return (
     <div className="relative rounded-2xl bg-white/[0.03] border border-white/[0.06] p-3 pr-[88px]">
       <div className="flex items-center justify-between mb-1">
@@ -205,8 +208,8 @@ export default function TaskPanel({
           : micActive ? "Listening…"
           : "Add RevenueCat paywall flow"
         }
-        rows={2}
-        className="w-full bg-transparent outline-none border-none resize-none
+        rows={textareaRows}
+        className="w-full bg-transparent outline-none border-none resize-y min-h-[56px] max-h-[70vh]
                    text-[13px] text-white placeholder-white/30 leading-relaxed
                    focus:placeholder-white/40"
       />

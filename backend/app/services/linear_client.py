@@ -531,6 +531,17 @@ _MY_ISSUES_QUERY = (
     " nodes {" + _ISSUE_FIELDS + "} } } }"
 )
 
+# Paginated connection — used when the UI requests every open assigned issue.
+_MY_ISSUES_PAGED_QUERY = (
+    "query MyIssuesPaged($first: Int!, $after: String) { viewer { "
+    "assignedIssues(first: $first, after: $after) {"
+    " pageInfo { hasNextPage endCursor }"
+    " nodes {" + _ISSUE_FIELDS + "} } } }"
+)
+
+# Hard cap so a pathological account can't hang the server / OOM the renderer.
+_MY_ASSIGNED_HARD_CAP = 3500
+
 _TEAM_WORKFLOW_STATES_QUERY = """
 query TeamWorkflowStates($teamId: String!) {
   team(id: $teamId) {
@@ -646,6 +657,60 @@ async def get_my_open_issues_with_key(
         for issue in assigned
         if (issue.get("state") or {}).get("type") not in ("completed", "canceled")
     ]
+
+
+async def get_all_my_open_issues_with_key(
+    api_key: str,
+    *,
+    page_size: int = 50,
+    max_open: int = _MY_ASSIGNED_HARD_CAP,
+) -> list[dict[str, Any]]:
+    """Every **open** assigned issue for this key, via GraphQL pagination.
+
+    Skips completed/canceled states. Stops at ``max_open`` open issues,
+    when Linear reports no further pages, or after a fixed page budget.
+    """
+    key = (api_key or "").strip()
+    if not key:
+        raise LinearClientError("Linear API key is empty")
+
+    ps = max(1, min(int(page_size), 100))
+    cap = max(1, min(int(max_open), _MY_ASSIGNED_HARD_CAP))
+    out: list[dict[str, Any]] = []
+    after: str | None = None
+    # Bound total GraphQL round-trips so huge all-completed backlogs can't loop forever.
+    max_pages = 250
+
+    for _ in range(max_pages):
+        if len(out) >= cap:
+            break
+        variables: dict[str, Any] = {"first": ps}
+        if after:
+            variables["after"] = after
+        data = await linear_graphql_with_key(key, _MY_ISSUES_PAGED_QUERY, variables)
+        viewer = data.get("viewer") or {}
+        conn = viewer.get("assignedIssues") or {}
+        nodes = conn.get("nodes") or []
+        page_info = conn.get("pageInfo") or {}
+
+        if not nodes:
+            break
+
+        for issue in nodes:
+            if len(out) >= cap:
+                break
+            if (issue.get("state") or {}).get("type") in ("completed", "canceled"):
+                continue
+            out.append(issue)
+
+        if not page_info.get("hasNextPage"):
+            break
+        nxt = page_info.get("endCursor")
+        if not nxt or (after is not None and nxt == after):
+            break
+        after = str(nxt)
+
+    return out
 
 
 async def aggregate_open_assigned_issues(

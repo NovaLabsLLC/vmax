@@ -11,7 +11,7 @@ type Card = {
 
 export default function CommandCards({ cards }: { cards: Card[] }) {
   return (
-    <div className="grid grid-cols-2 gap-1.5">
+    <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-1.5 w-full">
       {cards.map((c) => (
         <button
           key={c.key}
