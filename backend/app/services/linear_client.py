@@ -200,6 +200,96 @@ async def get_my_linear_issues(limit: int = 25) -> list[dict[str, Any]]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Explicit-key variants — used by the multi-workspace store. The non-suffixed
+# functions above are kept for the legacy single-env-key path so we don't
+# break the existing `/v1/ask` issue-lookup short-circuit.
+# ---------------------------------------------------------------------------
+
+
+_VERIFY_VIEWER_QUERY = """
+  query VerifyLinearViewer {
+    viewer {
+      id name displayName email
+      organization { id name urlKey }
+    }
+  }
+"""
+
+
+async def linear_graphql_with_key(
+    api_key: str,
+    query: str,
+    variables: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Same as ``linear_graphql`` but takes the API key explicitly so we
+    can target any saved workspace, not just the env-configured one."""
+    key = (api_key or "").strip()
+    if not key:
+        raise LinearClientError("Linear API key is empty")
+
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
+            response = await client.post(
+                LINEAR_API_URL,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": key,
+                },
+                json={"query": query, "variables": variables or {}},
+            )
+    except httpx.HTTPError as err:
+        raise LinearClientError(f"Linear network error: {err}") from err
+
+    if response.status_code >= 400:
+        body = response.text[:1000]
+        raise LinearClientError(
+            f"Linear HTTP {response.status_code}: {body}"
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as err:
+        raise LinearClientError(f"Linear response was not JSON: {err}") from err
+
+    if payload.get("errors"):
+        raise LinearClientError(f"Linear GraphQL errors: {payload['errors']}")
+
+    return payload.get("data") or {}
+
+
+async def verify_linear_key(api_key: str) -> dict[str, str]:
+    """Validate a key with Linear and surface viewer + workspace info.
+
+    Returns ``{viewer_name, viewer_email, workspace_name, workspace_url_key}``
+    on success. Raises ``LinearClientError`` if the key is empty/invalid or
+    Linear refuses it."""
+    data = await linear_graphql_with_key(api_key, _VERIFY_VIEWER_QUERY)
+    viewer = data.get("viewer") or {}
+    org = viewer.get("organization") or {}
+    return {
+        "viewer_name": viewer.get("name") or viewer.get("displayName") or "",
+        "viewer_email": viewer.get("email") or "",
+        "workspace_name": org.get("name") or "",
+        "workspace_url_key": org.get("urlKey") or "",
+    }
+
+
+async def get_my_open_issues_with_key(
+    api_key: str,
+    limit: int = 25,
+) -> list[dict[str, Any]]:
+    """Open assigned issues for the viewer of a specific key."""
+    data = await linear_graphql_with_key(api_key, _MY_ISSUES_QUERY, {"first": limit})
+    viewer = data.get("viewer") or {}
+    assigned = (viewer.get("assignedIssues") or {}).get("nodes") or []
+    return [
+        issue
+        for issue in assigned
+        if (issue.get("state") or {}).get("type") not in ("completed", "canceled")
+    ]
+
+
 def format_linear_issue_summary(issue_id: str, issue: dict[str, Any]) -> str:
     """Render an issue dict into the multiline ``summary`` field shown in
     the Vmax structured response."""

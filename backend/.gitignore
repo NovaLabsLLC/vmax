@@ -1,4 +1,6 @@
 .env
+# Persistent backend state (linear workspaces, etc.). Never commit — keys live here.
+data/
 __pycache__/
 *.py[cod]
 *.egg-info/

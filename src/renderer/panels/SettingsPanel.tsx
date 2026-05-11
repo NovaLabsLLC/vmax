@@ -1,4 +1,11 @@
 import React, { useEffect, useState } from "react";
+import {
+  addLinearWorkspace,
+  listLinearWorkspaces,
+  removeLinearWorkspace,
+  renameLinearWorkspace,
+  type LinearWorkspace,
+} from "../utils/linearWorkspacesApi";
 
 type Settings = {
   openaiApiKey: string;
@@ -20,8 +27,27 @@ export default function SettingsPanel() {
   const [saved, setSaved] = useState(false);
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [busy, setBusy] = useState<{ tool: "claude" | "codex"; kind: "login" | "install" } | null>(null);
-  const [linearBusy, setLinearBusy] = useState(false);
-  const [linearTest, setLinearTest] = useState<{ ok: boolean; msg: string } | null>(null);
+  // Linear: multi-workspace store on the backend, talked to via plain HTTP.
+  const [linearWorkspaces, setLinearWorkspaces] = useState<LinearWorkspace[]>([]);
+  const [linearLoading, setLinearLoading] = useState(false);
+  const [linearListError, setLinearListError] = useState<string | null>(null);
+  const [newLinearKey, setNewLinearKey] = useState("");
+  const [newLinearLabel, setNewLinearLabel] = useState("");
+  const [addingLinear, setAddingLinear] = useState(false);
+  const [addLinearError, setAddLinearError] = useState<string | null>(null);
+
+  async function refreshLinearWorkspaces() {
+    setLinearLoading(true);
+    setLinearListError(null);
+    try {
+      const list = await listLinearWorkspaces();
+      setLinearWorkspaces(list);
+    } catch (err) {
+      setLinearListError(String((err as Error)?.message || err));
+    } finally {
+      setLinearLoading(false);
+    }
+  }
 
   useEffect(() => {
     (async () => {
@@ -33,6 +59,7 @@ export default function SettingsPanel() {
       });
     })();
     void refreshCli();
+    void refreshLinearWorkspaces();
   }, []);
 
   async function refreshCli() {
@@ -71,21 +98,38 @@ export default function SettingsPanel() {
     }
   }
 
-  async function testLinear() {
-    setLinearTest(null);
-    setLinearBusy(true);
+  async function addWorkspace() {
+    const key = newLinearKey.trim();
+    if (!key) return;
+    setAddingLinear(true);
+    setAddLinearError(null);
     try {
-      const r = await window.exec.linearVerify(s.linearApiKey);
-      if (r.ok) {
-        const who = [r.userName, r.email].filter(Boolean).join(" · ");
-        setLinearTest({ ok: true, msg: who || "API key is valid." });
-      } else {
-        setLinearTest({ ok: false, msg: r.error || "Could not reach Linear." });
-      }
+      await addLinearWorkspace({ apiKey: key, label: newLinearLabel.trim() });
+      setNewLinearKey("");
+      setNewLinearLabel("");
+      await refreshLinearWorkspaces();
     } catch (err) {
-      setLinearTest({ ok: false, msg: String((err as Error)?.message || err) });
+      setAddLinearError(String((err as Error)?.message || err));
     } finally {
-      setLinearBusy(false);
+      setAddingLinear(false);
+    }
+  }
+
+  async function removeWorkspace(id: string) {
+    try {
+      await removeLinearWorkspace(id);
+      await refreshLinearWorkspaces();
+    } catch (err) {
+      setLinearListError(String((err as Error)?.message || err));
+    }
+  }
+
+  async function renameWorkspace(id: string, label: string) {
+    try {
+      await renameLinearWorkspace(id, label);
+      await refreshLinearWorkspaces();
+    } catch (err) {
+      setLinearListError(String((err as Error)?.message || err));
     }
   }
 
@@ -94,7 +138,7 @@ export default function SettingsPanel() {
       <div>
         <div className="text-[18px] font-semibold tracking-tight">Settings</div>
         <div className="text-[12.5px] text-white/50 mt-0.5">
-          Keys stay in your Vmax user data. AI keys go to OpenAI / Anthropic; the Linear key is only sent to Linear when you test it or when we fetch issues later.
+          AI keys live in your Vmax user data and are sent to OpenAI / Anthropic from this app. Linear workspaces are stored on the Vmax backend — raw keys never come back to the client, you'll only see a "…abcd" preview.
         </div>
       </div>
 
@@ -117,38 +161,22 @@ export default function SettingsPanel() {
           onChange={(v) => setS({ ...s, anthropicApiKey: v })}
         />
 
-        <KeyInput
-          label="Linear API key"
-          placeholder="lin_api_…"
-          hint="Used to verify your workspace and (soon) pull issue details. Create one under Linear → Settings → API → Personal API keys."
-          value={s.linearApiKey}
-          onChange={(v) => setS({ ...s, linearApiKey: v })}
+        <LinearWorkspaceList
+          workspaces={linearWorkspaces}
+          loading={linearLoading}
+          listError={linearListError}
+          newKey={newLinearKey}
+          onNewKeyChange={setNewLinearKey}
+          newLabel={newLinearLabel}
+          onNewLabelChange={setNewLinearLabel}
+          adding={addingLinear}
+          addError={addLinearError}
+          onAdd={() => void addWorkspace()}
+          onRemove={(id) => void removeWorkspace(id)}
+          onRename={(id, label) => void renameWorkspace(id, label)}
+          onRefresh={() => void refreshLinearWorkspaces()}
+          onOpenLinearApi={() => void window.exec.openUrl("https://linear.app/settings/api")}
         />
-
-        <div className="flex flex-wrap items-center gap-2 pt-0.5">
-          <button
-            type="button"
-            className="h-8 px-3 rounded-lg text-[11.5px] font-medium bg-white/[0.08] hover:bg-white/[0.12] border border-white/[0.14] text-white/90"
-            onClick={() => void window.exec.openUrl("https://linear.app/settings/api")}
-          >
-            Open Linear API keys
-          </button>
-          <button
-            type="button"
-            disabled={linearBusy || !s.linearApiKey.trim()}
-            className="h-8 px-3 rounded-lg text-[11.5px] font-medium bg-white/[0.08] hover:bg-white/[0.12] border border-white/[0.14] text-white/90 disabled:opacity-45"
-            onClick={() => void testLinear()}
-          >
-            {linearBusy ? "Checking…" : "Test connection"}
-          </button>
-        </div>
-        {linearTest ? (
-          <div
-            className={`text-[11.5px] ${linearTest.ok ? "text-emerald-300/95" : "text-rose-300/90"}`}
-          >
-            {linearTest.msg}
-          </div>
-        ) : null}
 
         <div className="flex items-center gap-2 pt-1">
           <button
@@ -314,5 +342,192 @@ function KeyInput({
       />
       {hint && <div className="text-[10.5px] text-white/35 mt-1 leading-snug">{hint}</div>}
     </div>
+  );
+}
+
+function LinearWorkspaceList({
+  workspaces,
+  loading,
+  listError,
+  newKey,
+  onNewKeyChange,
+  newLabel,
+  onNewLabelChange,
+  adding,
+  addError,
+  onAdd,
+  onRemove,
+  onRename,
+  onRefresh,
+  onOpenLinearApi,
+}: {
+  workspaces: LinearWorkspace[];
+  loading: boolean;
+  listError: string | null;
+  newKey: string;
+  onNewKeyChange: (v: string) => void;
+  newLabel: string;
+  onNewLabelChange: (v: string) => void;
+  adding: boolean;
+  addError: string | null;
+  onAdd: () => void;
+  onRemove: (id: string) => void;
+  onRename: (id: string, label: string) => void;
+  onRefresh: () => void;
+  onOpenLinearApi: () => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-baseline justify-between">
+        <div className="text-[12px] text-white/85">Linear workspaces</div>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="text-[10.5px] text-white/45 hover:text-white/80"
+          >
+            {loading ? "Refreshing…" : "Refresh"}
+          </button>
+          <button
+            type="button"
+            onClick={onOpenLinearApi}
+            className="text-[10.5px] text-white/45 hover:text-white/80"
+          >
+            Open Linear API keys
+          </button>
+        </div>
+      </div>
+
+      {listError ? (
+        <div className="text-[11.5px] text-rose-300/90 leading-snug">
+          Couldn’t reach the Vmax backend: {listError}. Start it with{" "}
+          <span className="font-mono text-white/70">uvicorn app.main:app --reload</span>{" "}
+          from <span className="font-mono text-white/70">backend/</span>.
+        </div>
+      ) : workspaces.length === 0 ? (
+        <div className="text-[11.5px] text-white/45 leading-snug">
+          No workspaces connected. Paste a Linear personal API key below — the backend
+          verifies it, stores it, and you can connect as many as you want.
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {workspaces.map((w) => (
+            <LinearWorkspaceRow
+              key={w.id}
+              entry={w}
+              onRemove={() => onRemove(w.id)}
+              onRename={(label) => onRename(w.id, label)}
+            />
+          ))}
+        </ul>
+      )}
+
+      <div className="rounded-xl border border-white/[0.08] bg-black/30 p-3 space-y-2">
+        <div className="text-[10.5px] uppercase tracking-[0.14em] text-white/40">Add workspace</div>
+        <input
+          type="password"
+          value={newKey}
+          placeholder="lin_api_…"
+          onChange={(e) => onNewKeyChange(e.target.value)}
+          spellCheck={false}
+          autoComplete="off"
+          className="w-full h-9 px-3 rounded-lg bg-black/40 border border-white/[0.10] text-[12.5px] text-white placeholder:text-white/30 focus:outline-none focus:border-white/30 font-mono"
+        />
+        <input
+          type="text"
+          value={newLabel}
+          placeholder="Label (optional — defaults to the workspace name)"
+          onChange={(e) => onNewLabelChange(e.target.value)}
+          spellCheck={false}
+          className="w-full h-9 px-3 rounded-lg bg-black/40 border border-white/[0.10] text-[12.5px] text-white placeholder:text-white/30 focus:outline-none focus:border-white/30"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={adding || !newKey.trim()}
+            onClick={onAdd}
+            className="h-8 px-3 rounded-lg text-[11.5px] font-medium bg-white text-black hover:bg-white/90 disabled:opacity-45"
+          >
+            {adding ? "Verifying…" : "Connect workspace"}
+          </button>
+          {addError ? (
+            <span className="text-[11.5px] text-rose-300/90 leading-snug">{addError}</span>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LinearWorkspaceRow({
+  entry,
+  onRemove,
+  onRename,
+}: {
+  entry: LinearWorkspace;
+  onRemove: () => void;
+  onRename: (label: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(entry.label || "");
+
+  const displayName = entry.label || entry.workspace_name || "Linear workspace";
+  const sub = [
+    entry.viewer_name,
+    entry.viewer_email,
+    entry.workspace_name && entry.label ? entry.workspace_name : "",
+    entry.key_preview,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  function commitRename() {
+    const next = draft.trim();
+    setEditing(false);
+    if (next !== (entry.label || "")) onRename(next);
+  }
+
+  return (
+    <li className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2">
+      <span className="h-2 w-2 rounded-full bg-emerald-400 shrink-0" />
+      <div className="min-w-0 flex-1">
+        {editing ? (
+          <input
+            value={draft}
+            autoFocus
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              else if (e.key === "Escape") {
+                setDraft(entry.label || "");
+                setEditing(false);
+              }
+            }}
+            className="w-full h-7 px-2 rounded-md bg-black/40 border border-white/[0.14] text-[12.5px] text-white focus:outline-none focus:border-white/30"
+          />
+        ) : (
+          <button
+            type="button"
+            className="text-left text-[12.5px] text-white truncate hover:text-white/80"
+            title="Rename"
+            onClick={() => {
+              setDraft(entry.label || "");
+              setEditing(true);
+            }}
+          >
+            {displayName}
+          </button>
+        )}
+        <div className="text-[10.5px] text-white/45 truncate">{sub || "verified"}</div>
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="shrink-0 h-7 px-2.5 rounded-md text-[11px] text-rose-200/90 hover:text-rose-100 bg-rose-500/[0.08] hover:bg-rose-500/[0.14] border border-rose-400/20"
+      >
+        Remove
+      </button>
+    </li>
   );
 }
