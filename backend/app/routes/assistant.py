@@ -12,6 +12,8 @@ untracked files when users asked unrelated questions like "hello"."""
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter
 
 from ..schemas.common import HistoryTurn, StructuredResponse
@@ -29,12 +31,15 @@ from ..services.linear_client import (
     LinearClientError,
     aggregate_open_assigned_issues,
     extract_linear_issue_id,
+    extract_linear_issue_update_fields,
     format_linear_issue_summary,
     format_linear_speakable,
     format_my_issues_speakable,
     format_my_issues_summary,
     get_linear_issue,
     is_my_issues_question,
+    linear_update_issue,
+    prefers_linear_issue_read_over_update,
 )
 from ..services.meta_capability import (
     is_meta_capability_question,
@@ -113,6 +118,60 @@ async def _linear_single_issue_envelope(issue_id: str) -> StructuredEnvelope | N
     return StructuredEnvelope(structured=payload, parse_warning=False)
 
 
+async def _linear_update_issue_envelope(
+    issue_id: str,
+    fields: dict[str, Any],
+) -> StructuredEnvelope:
+    """Persist an ``issueUpdate`` when the user asked to change Linear."""
+    try:
+        updated = await linear_update_issue(
+            issue_id,
+            state_target=(fields.get("state_target")),
+            title=(fields.get("title")),
+            description=(fields.get("description")),
+            description_append=(fields.get("description_append")),
+            priority=(fields.get("priority")),
+        )
+        body = format_linear_issue_summary(issue_id, updated)
+        payload = StructuredResponse(
+            summary=f"Updated {issue_id} in Linear.\n\n{body}",
+            speakable_summary=(
+                f"{issue_id} updated in Linear. "
+                f"{format_linear_speakable(issue_id, updated)}"
+            ),
+            what_vmax_sees=f"Linear issue updated {issue_id}",
+            execution_recommendation="none",
+        )
+        log_audit(
+            "ask_linear_shortcut",
+            kind="issue_update",
+            issue_id=issue_id,
+            ok=True,
+            title=updated.get("title") or "",
+            state=(updated.get("state") or {}).get("name") or "",
+            url=updated.get("url") or "",
+        )
+        return StructuredEnvelope(structured=payload, parse_warning=False)
+    except LinearClientError as err:
+        payload_err = StructuredResponse(
+            summary=f"I could not update {issue_id} in Linear: {err}",
+            likely_problem=(
+                "The wording may need a clearer state label, or Linear "
+                "rejected the change (permissions, workflow, or archived issue)."
+            ),
+            speakable_summary=f"{issue_id} could not be updated in Linear.",
+            execution_recommendation="none",
+        )
+        log_audit(
+            "ask_linear_shortcut",
+            kind="issue_update",
+            issue_id=issue_id,
+            ok=False,
+            error=str(err),
+        )
+        return StructuredEnvelope(structured=payload_err, parse_warning=False)
+
+
 async def _linear_my_issues_envelope() -> StructuredEnvelope | None:
     """Fetch the viewer's assigned-and-open issues and render them as a
     priority-sorted list. Returns None on Linear error so the LLM can
@@ -147,23 +206,27 @@ async def _linear_my_issues_envelope() -> StructuredEnvelope | None:
 
 
 async def _try_linear_shortcut(question: str) -> StructuredEnvelope | None:
-    """Deterministic Linear answers for two question shapes:
+    """Deterministic Linear answers:
 
-      1. "what is EXE-35" / "show me EXE-35" — fetches the single issue.
-      2. "what should I work on" / "show me my tickets" — fetches all
-         open issues assigned to the viewer, priority-sorted.
+      1. Read: "what is EXE-35" — fetches one issue.
+      2. Mutate: imperatives like "mark EXE-35 as done", "move EXE-35 to In
+         Review", "priority … to high" — applies ``issueUpdate``.
+      3. List: "what should I work on" / "my tickets" — open assigned issues.
 
-    Single-issue check runs first so "what's on my plate for EXE-35"
-    resolves to EXE-35 rather than the whole queue.
+    Interrogative prompts win over updates; a bare issue id still fetches.
 
-    Returns None to mean "fall through to the LLM path" — used when no
-    Linear key is configured, no trigger matched, or Linear itself
-    errored."""
+    Returns None to fall through when no key, no match, or upstream error
+    (depending on path)."""
     if not linear_workspaces.effective_workspaces():
         return None
 
     issue_id = extract_linear_issue_id(question)
     if issue_id:
+        if not prefers_linear_issue_read_over_update(question):
+            update_fields = extract_linear_issue_update_fields(question, issue_id)
+            if update_fields:
+                return await _linear_update_issue_envelope(issue_id, update_fields)
+
         return await _linear_single_issue_envelope(issue_id)
 
     if is_my_issues_question(question):

@@ -2,8 +2,8 @@
 
 Two surfaces live here:
 
-1. **Issue-level lookups** for ``/v1/ask`` and quick-look cards
-   (``GET /issues/{issue_id}``).
+1. **Issue lookups and patch** — ``GET /issues/{issue_id}`` plus
+   ``PATCH /issues/{issue_id}`` (title, description, priority, workflow state).
 
 2. **Workspace CRUD** for the Settings UI — the renderer manages the
    list of connected Linear workspaces by hitting these endpoints. Each
@@ -34,6 +34,7 @@ from ..services.linear_client import (
     get_linear_issue,
     get_my_linear_issues,
     get_my_open_issues_with_key,
+    linear_update_issue,
     verify_linear_key,
 )
 
@@ -73,6 +74,91 @@ async def read_linear_issue(issue_id: str) -> dict[str, Any]:
 
     log_audit(
         "linear_issue_lookup",
+        issue_id=issue_id,
+        ok=True,
+        title=issue.get("title") or "",
+        state=(issue.get("state") or {}).get("name") or "",
+    )
+    return issue
+
+
+class LinearIssuePatchBody(BaseModel):
+    state_target: str | None = Field(
+        default=None,
+        description="Workflow column name or synonym (done, backlog, canceled, …).",
+    )
+    title: str | None = None
+    description: str | None = None
+    description_append: str | None = Field(
+        default=None,
+        description="Concatenates after existing description (exclusive with full replace).",
+    )
+    priority: int | None = Field(default=None, ge=0, le=4)
+
+
+@router.patch("/issues/{issue_id}")
+async def patch_linear_issue(
+    issue_id: str,
+    body: LinearIssuePatchBody = Body(...),
+) -> dict[str, Any]:
+    _require_linear()
+    if body.description is not None and body.description_append is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Use either description or description_append, not both.",
+        )
+
+    touched = (
+        body.state_target is not None,
+        body.title is not None,
+        body.description is not None,
+        body.description_append is not None,
+        body.priority is not None,
+    )
+    if not any(touched):
+        raise HTTPException(status_code=400, detail="No fields supplied to patch")
+
+    kwargs: dict[str, Any] = {}
+    if body.state_target is not None:
+        ks = body.state_target.strip()
+        if ks:
+            kwargs["state_target"] = ks
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="state_target, when present, cannot be blank",
+            )
+    if body.title is not None:
+        kwargs["title"] = body.title.strip() or ""
+    if body.description is not None:
+        kwargs["description"] = body.description
+    if body.description_append is not None:
+        kwargs["description_append"] = body.description_append
+
+    prio = None if body.priority is None else body.priority
+    if prio is not None:
+        kwargs["priority"] = prio
+
+    try:
+        issue = await linear_update_issue(
+            issue_id.strip(),
+            state_target=(kwargs.pop("state_target", None)),
+            title=kwargs.get("title"),
+            description=kwargs.pop("description", None),
+            description_append=(kwargs.pop("description_append", None)),
+            priority=(kwargs.pop("priority", None)),
+        )
+    except LinearClientError as err:
+        log_audit(
+            "linear_issue_patch",
+            issue_id=issue_id,
+            ok=False,
+            error=str(err),
+        )
+        raise HTTPException(status_code=502, detail=str(err))
+
+    log_audit(
+        "linear_issue_patch",
         issue_id=issue_id,
         ok=True,
         title=issue.get("title") or "",

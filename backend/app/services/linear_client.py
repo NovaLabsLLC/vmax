@@ -2,8 +2,10 @@
 
 The `/v1/ask` route short-circuits questions that reference a Linear issue
 identifier (e.g. ``EXE-35``) to this client instead of relying on the
-screenshot context. The Linear personal-API-key auth header is bare
-``Authorization: <key>`` — not ``Bearer <key>`` — per Linear's docs.
+screenshot context, and can apply ``issueUpdate`` when the user clearly
+asks to change state, title, description, or priority. The Linear
+personal-API-key auth header is bare ``Authorization: <key>`` — not
+``Bearer <key>`` — per Linear's docs.
 
 If ``LINEAR_API_KEY`` is unset, callers should detect that via
 ``settings.has_linear`` and skip Linear entirely; this module raises
@@ -150,6 +152,312 @@ def extract_linear_issue_id(text: str | None) -> str | None:
     return match.group(0) if match else None
 
 
+# Map casual words to Linear ``WorkflowState.type`` values returned by GraphQL.
+_STATE_KEYWORD_TO_TYPE: dict[str, str] = {
+    # completed
+    "done": "completed",
+    "doing": "started",
+    "fix": "completed",
+    "fixed": "completed",
+    "completed": "completed",
+    "complete": "completed",
+    "closes": "completed",
+    "close": "completed",
+    "closing": "completed",
+    "closed": "completed",
+    "finish": "completed",
+    "finishes": "completed",
+    "finished": "completed",
+    "finalize": "completed",
+    "ship": "completed",
+    "shipped": "completed",
+    "merged": "completed",
+    "merge": "completed",
+    "deployed": "completed",
+    "deploy": "completed",
+    "resolve": "completed",
+    "resolves": "completed",
+    "resolved": "completed",
+    # canceled (Linear spelling is ``canceled``)
+    "cancel": "canceled",
+    "canceling": "canceled",
+    "cancelling": "canceled",
+    "cancelled": "canceled",
+    "canceled": "canceled",
+    "duplicate": "canceled",
+    "wontfix": "canceled",
+    "won't fix": "canceled",
+    "wont": "canceled",
+    # backlog / unstarted
+    "todo": "unstarted",
+    "backlog": "backlog",
+    "unstarted": "unstarted",
+    "planned": "unstarted",
+    "queue": "unstarted",
+    "queued": "unstarted",
+    "triage": "unstarted",
+    # started — best-effort synonyms (boards often use custom columns)
+    "progress": "started",
+    "in progress": "started",
+    "in-progress": "started",
+    "active": "started",
+    "started": "started",
+    "implementing": "started",
+    "working": "started",
+    "blocked": "started",
+    "review": "started",
+}
+
+
+_READ_OVER_UPDATE_HINTS_RE = re.compile(
+    r"(?ix)^\s*("
+    r"what'?s\b|what is\b|what are\b"
+    r"|who\b|when\b|where\b|why\b|how does\b|how do\b|how should\b"
+    r"|tell me\b|explain\b|describe\b|summarize\b|summarise\b"
+    r"|give me\b|give us\b"
+    r"|lookup\b|fetch\b"
+    r"|can you explain\b)"
+)
+
+
+def prefers_linear_issue_read_over_update(question: str | None) -> bool:
+    """Interrogative summaries should win over destructive Linear updates."""
+
+    q = question or ""
+    if not q.strip():
+        return True
+    if _READ_OVER_UPDATE_HINTS_RE.match(q.strip()):
+        return True
+    if "how do i " in q.lower() or "how should i " in q.lower():
+        return True
+    return False
+
+
+def extract_linear_issue_update_fields(
+    question: str,
+    issue_identifier: str,
+) -> dict[str, Any] | None:
+    """Parse imperative Linear updates (workflow state, priority, title …).
+
+    Returns ``None`` when nothing actionable parses."""
+
+    prio_vocab: dict[str, int] = {
+        "none": 0,
+        "nopriority": 0,
+        "nop": 0,
+        "np": 0,
+        "urgent": 1,
+        "p1": 1,
+        "high": 2,
+        "p2": 2,
+        "medium": 3,
+        "med": 3,
+        "mid": 3,
+        "normal": 3,
+        "p3": 3,
+        "low": 4,
+        "p4": 4,
+        "p0": 0,
+        "p5": 4,
+        "0": 0,
+        "1": 1,
+        "2": 2,
+        "3": 3,
+        "4": 4,
+        "5": 0,
+        "6": 0,
+        "7": 0,
+        "8": 0,
+        "9": 0,
+    }
+
+    iq = issue_identifier.upper()
+    iid_esc = re.escape(iq)
+    q = question.strip()
+    patches: dict[str, Any] = {}
+
+    rename_m = re.search(
+        rf"(?is)\brename\b\s+[^\n]{{0,160}}?\b{iid_esc}\b\s+\bto\b\s*(?P<t>[^\n]+)",
+        q,
+    )
+    if not rename_m:
+        rename_m = re.search(
+            rf"(?is)\b{iid_esc}\b\s+(?:ticket|issue\s+)?\brename\b\s+\bto\b\s*(?P<t>[^\n]+)",
+            q,
+        )
+    append_m = re.search(
+        rf"(?is)\b{iid_esc}\b[^\n]{{0,160}}?\b(?:add|append)\b[^\n]{{0,80}}?"
+        rf"\b(?:desc(?:ription)?)\b[^\n]{{0,70}}?[:\.](?P<a>[^\n]+)",
+        q,
+    )
+    if append_m:
+        text = append_m.group("a").strip().strip(".").strip()
+        if text:
+            patches.setdefault("description_append", text)
+
+    if not patches.get("description_append"):
+        append_m = re.search(
+            rf"(?is)\b(?:add|append)\b[^\n]{{0,120}}?\b(?:desc(?:ription)?)"
+            rf"\b[^\n]{{0,90}}?\b{iid_esc}\b[^\n]{{0,70}}?[:\.](?P<a>[^\n]+)",
+            q,
+        )
+        if append_m:
+            patches.setdefault(
+                "description_append",
+                append_m.group("a").strip().strip(".").strip(),
+            )
+
+    if not patches.get("description_append"):
+        append_m = re.search(
+            rf"(?is)\b(?:add|append)\b[^\n]{{0,60}}?\b(?:this\b\s+)?"
+            rf"(?:(?:something|text)\s+)?\bto\b\s*\b(?:the\s+)?(?:desc(?:ription)?)"
+            rf"\b[^\n]{{0,40}}?\b(?:at\b\s*\b(?:the\s+)?end\b)?[^\n]{{0,40}}"
+            rf"\b{iid_esc}\b[^\n]{{0,40}}?[:\.](?P<a>[^\n]+)",
+            q,
+        )
+        if append_m:
+            patches.setdefault(
+                "description_append",
+                append_m.group("a").strip().strip(".").strip(),
+            )
+
+    if not patches.get("description_append"):
+        append_m = re.search(
+            rf"(?is)\b(?:add|append)\b[^\n]{{0,60}}?\b(?:this\b\s+)?"
+            rf"(?:(?:something|text)\s+)?\bto\b\s*\b(?:the\s+)?(?:desc(?:ription)?)"
+            rf"\b[^\n]{{0,40}}?\b(?:at\b\s*\b(?:the\s+)?end\b)[^\n]{{0,40}}"
+            rf"\b{iid_esc}\b[^\n]{{0,35}}?[:\.](?P<a>[^\n]+)",
+            q,
+        )
+        if append_m:
+            patches.setdefault(
+                "description_append",
+                append_m.group("a").strip().strip(".").strip(),
+            )
+
+    if rename_m:
+        t_raw = rename_m.group("t").strip().strip('"').strip("'").strip()
+        if t_raw and iq.lower() not in t_raw.lower():
+            patches["title"] = t_raw
+
+    prio_m = re.search(
+        rf"(?is)\bpriority\b[^\n.]{{0,130}}?\b{iid_esc}\b[^\n.]{{0,70}}?"
+        rf"\bto\b\s*(?P<p>\S[^\n.]{{0,28}}?)",
+        q,
+    )
+    if not prio_m:
+        prio_m = re.search(
+            rf"(?is)\b{iid_esc}\b[^\n.]{{0,95}}\bpriority\b[^\n.]{{0,52}}?"
+            rf"\bto\b\s*(?P<p>\S[^\n.]{{0,28}}?)",
+            q,
+        )
+    prio_raw_clean: str | None = None
+    if prio_m:
+        prio_raw_clean = prio_m.group("p").strip().strip('"').strip("'").strip(".")
+        pkey_spaced = prio_raw_clean.lower().replace("-", " ")
+        pk = pkey_spaced.replace(" ", "")
+        prio_val = prio_vocab.get(pk) or prio_vocab.get(prio_raw_clean.lower())
+        if prio_val is None and prio_raw_clean.isdigit():
+            n = int(prio_raw_clean)
+            if 0 <= n <= 4:
+                prio_val = n
+        if prio_val is not None:
+            patches["priority"] = prio_val
+
+    desc_m = re.search(
+        rf"(?is)\b(?:description|desc)\b[^\n.]{{0,50}}?\b{iid_esc}\b[^\n.]{{0,50}}?"
+        rf"\bto\b\s+[""'](?P<d>[^""']+)[""']",
+        q,
+    )
+    if desc_m:
+        patches["description"] = desc_m.group("d").strip()
+    if not patches.get("description"):
+        desc_plain = re.search(
+            rf"(?is)\b(?:desc(?:ription)?)\b[^\n.]{{0,55}}?\b{iid_esc}\b[^\n.]{{0,55}}?"
+            rf"\bto\b\s*(?P<d>[^\n]+)",
+            q,
+        )
+        if desc_plain:
+            patches["description"] = desc_plain.group("d").strip()
+
+    rename_sentence = bool(rename_m) or bool(
+        re.search(rf"(?is)\brename\b[^\n]{{0,200}}?\b{iid_esc}\b", q)
+    )
+
+    move_m = re.search(
+        rf"(?is)\bmove\b[^\n.;]{{0,100}}?\b{iid_esc}\b[^\n.;]{{0,50}}"
+        rf"\bto\b\s*(?P<lbl>[^\n.;?]+)",
+        q,
+    )
+    if move_m:
+        patches["state_target"] = move_m.group("lbl").strip().strip('"').strip("'").strip(".")
+
+    asm = re.search(
+        rf"(?is)\b(?:mark|set)\b[^\n.;]{{0,100}}?\b{iid_esc}\b[^\n.;]{{0,50}}"
+        rf"\bas\b\s*(?P<lbl>[^\n.;?]+)",
+        q,
+    )
+    if asm:
+        patches["state_target"] = asm.group("lbl").strip().strip('"').strip("'").strip(".")
+
+    sts_m = re.search(
+        rf"(?is)\b(?:status|state)\b[^\n.;]{{0,90}}?\b{iid_esc}\b[^\n.;]{{0,55}}"
+        rf"\bto\b\s*(?P<lbl>[^\n.;?]+)",
+        q,
+    )
+    if sts_m:
+        patches["state_target"] = sts_m.group("lbl").strip().strip('"').strip("'").strip(".")
+
+    trailing = re.search(
+        rf"(?is)\b{iid_esc}\b[^\n.;]{{0,40}}\bto\b\s*(?P<lbl>[^\n.;?]+)",
+        q,
+    )
+    if trailing and not rename_sentence and move_m is None and asm is None and sts_m is None:
+        lbl = trailing.group("lbl").strip().strip('"').strip("'").strip(".")
+        first_w = lbl.lower().split()[0] if lbl.split() else ""
+        ok_first = bool(first_w) and first_w not in {"priority", "rename", "the"}
+        if ok_first and "priority to" not in q.lower()[trailing.start() : trailing.end()]:
+            lk = lbl.lower().replace("-", "").replace(" ", "")
+            if lk in prio_vocab and prio_raw_clean != lbl.strip():
+                patches.setdefault("priority", prio_vocab[lk])
+            elif lk not in prio_vocab:
+                patches.setdefault("state_target", lbl)
+
+    if not (rename_m and patches.get("title")):
+        if re.search(
+            rf"(?is)\b(?:close|closes|finish|finishes|complete|completed|finalize|"
+            rf"ship|shipped|deploy|deployed|resolve|resolves|resolved)\w*\s+"
+            rf".{{0,24}}\b{iid_esc}\b",
+            q,
+        ):
+            patches.setdefault("state_target", "completed")
+        if re.search(
+            rf"(?is)\b(?:re[- ]?)?open\b\s+.{0,24}\b{iid_esc}\b",
+            q,
+        ):
+            patches.setdefault("state_target", "started")
+        if re.search(
+            rf"(?is)\b(?:cancel|cancelling|cancelled|canceled)\w*\s+.{0,24}\b{iid_esc}\b",
+            q,
+        ):
+            patches.setdefault("state_target", "canceled")
+
+    if rename_m and patches.get("title"):
+        if move_m is None and asm is None and sts_m is None:
+            patches.pop("state_target", None)
+    st = patches.get("state_target")
+    if isinstance(st, str) and patches.get("priority") is None:
+        st0 = st.strip().lower().split()[0] if st.strip() else ""
+        st_compact = st.lower().replace(" ", "").replace("-", "")
+        if st_compact in prio_vocab or st0 in prio_vocab:
+            v = prio_vocab.get(st_compact) or prio_vocab.get(st0)
+            if v is not None:
+                patches.pop("state_target", None)
+                patches["priority"] = v
+
+    return patches if patches else None
+
+
 async def linear_graphql(
     query: str,
     variables: dict[str, Any] | None = None,
@@ -221,6 +529,33 @@ _GET_ISSUE_QUERY = (
 _MY_ISSUES_QUERY = (
     "query MyIssues($first: Int!) { viewer { assignedIssues(first: $first) {"
     " nodes {" + _ISSUE_FIELDS + "} } } }"
+)
+
+_TEAM_WORKFLOW_STATES_QUERY = """
+query TeamWorkflowStates($teamId: String!) {
+  team(id: $teamId) {
+    states {
+      nodes { id name type position }
+    }
+  }
+}
+"""
+
+_ISSUE_UPDATE_RESULT_FIELDS = """
+  id
+  identifier
+  title
+  url
+  priority
+  state { id name type }
+"""
+
+_ISSUE_UPDATE_MUTATION = (
+    "mutation IssueUpdateLinear($issueId: String!, $input: IssueUpdateInput!) {"
+    " issueUpdate(id: $issueId, input: $input) { success"
+    " issue {" + _ISSUE_UPDATE_RESULT_FIELDS + "}"
+    " }"
+    "}"
 )
 
 
@@ -360,6 +695,195 @@ async def get_linear_issue(issue_id: str) -> dict[str, Any] | None:
         if hit:
             return hit
     return None
+
+
+async def get_linear_issue_with_api_key(
+    issue_id: str,
+) -> tuple[dict[str, Any], str] | None:
+    """Like ``get_linear_issue`` but also returns which API key resolved it,
+    needed for issuing mutations scoped to that workspace."""
+
+    for ws in linear_workspaces.effective_workspaces():
+        api_key = (ws.key or "").strip()
+        if not api_key:
+            continue
+        try:
+            data = await linear_graphql_with_key(
+                api_key, _GET_ISSUE_QUERY, {"id": issue_id},
+            )
+        except LinearClientError:
+            continue
+        hit = data.get("issue")
+        if hit:
+            return hit, api_key
+    return None
+
+
+async def fetch_team_workflow_states(api_key: str, team_id: str) -> list[dict[str, Any]]:
+    data = await linear_graphql_with_key(
+        api_key,
+        _TEAM_WORKFLOW_STATES_QUERY,
+        {"teamId": team_id},
+    )
+    team = data.get("team") or {}
+    return list((team.get("states") or {}).get("nodes") or [])
+
+
+def _workflow_states_sorted_by_column(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def position(s: dict[str, Any]) -> float:
+        p = s.get("position")
+        try:
+            return float(p)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return sorted(states, key=position)
+
+
+def workflow_state_id_for_linear_type(states: list[dict[str, Any]], linear_type: str) -> str | None:
+    """Pick the earliest workflow column that matches Linear's ``type``.
+
+    Typical boards have exactly one ``completed`` column, etc."""
+    lt = linear_type.strip().lower()
+    pool = [s for s in states if ((s.get("type") or "").strip().lower() == lt)]
+    if not pool:
+        return None
+    ordered = _workflow_states_sorted_by_column(pool)
+    return ordered[0].get("id")
+
+
+def workflow_state_id_for_label(states: list[dict[str, Any]], fragment: str) -> str | None:
+    """Exact or ``needle in column_name`` match (never reverse — avoids
+    e.g. matching *Finished* against *unfinished*)."""
+
+    needle = fragment.strip().lower()
+    if not needle:
+        return None
+    normalized: list[tuple[int, dict[str, Any]]] = []
+    for s in states:
+        nm = ((s.get("name") or "").strip().lower())
+        if not nm:
+            continue
+        if nm == needle:
+            return s.get("id")
+        if needle in nm:
+            normalized.append((len(nm), s))
+    if not normalized:
+        return None
+    normalized.sort(key=lambda kv: kv[0])
+    return normalized[0][1].get("id")
+
+
+def _linear_state_type_from_phrase(phrase_lo: str) -> str | None:
+    synonyms = sorted(
+        _STATE_KEYWORD_TO_TYPE.items(),
+        key=lambda kv: len(kv[0]),
+        reverse=True,
+    )
+    for word, wf in synonyms:
+        if " " in word or "'" in word:
+            if word in phrase_lo:
+                return wf
+        elif re.search(rf"(?<!\w){re.escape(word)}(?!\w)", phrase_lo):
+            return wf
+    return None
+
+
+def workflow_state_id_for_target(states: list[dict[str, Any]], target: str) -> str | None:
+    """Prefer a named board column, then fall back to Linear ``type``.
+
+    Resolves inputs like *In Review* (label) or *done* (maps to
+    ``completed``)."""
+    trimmed = target.strip().lower()
+    if not trimmed:
+        return None
+    sid = workflow_state_id_for_label(states, target)
+    if sid:
+        return sid
+    wf_type = _linear_state_type_from_phrase(trimmed)
+    if wf_type:
+        return workflow_state_id_for_linear_type(states, wf_type)
+    return None
+
+
+async def linear_update_issue(
+    issue_identifier: str,
+    *,
+    state_target: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    description_append: str | None = None,
+    priority: int | None = None,
+) -> dict[str, Any]:
+    """Apply Linear ``issueUpdate`` using the workspace that owns the row.
+
+    At least one updatable field must be present or this raises."""
+
+    ctx = await get_linear_issue_with_api_key(issue_identifier)
+    if not ctx:
+        raise LinearClientError(f"Issue {issue_identifier} not found in Linear.")
+
+    issue, api_key = ctx
+
+    blobs: dict[str, Any] = {}
+    if title is not None and str(title).strip():
+        blobs["title"] = str(title).strip()
+    desc_out: str | None = None
+    if description is not None:
+        desc_out = str(description)
+    if description_append is not None and str(description_append).strip():
+        app = str(description_append).strip()
+        prev = ""
+        if desc_out is None:
+            prev = ((issue.get("description") or "").rstrip())
+        else:
+            prev = desc_out.rstrip()
+        spacer = "\n\n" if prev else ""
+        desc_out = f"{prev}{spacer}{app}"
+    if desc_out is not None:
+        blobs["description"] = desc_out
+    if priority is not None:
+        blobs["priority"] = int(priority)
+
+    team = issue.get("team") or {}
+    team_id = team.get("id")
+    inner: dict[str, Any] = dict(blobs)
+
+    if state_target:
+        if not isinstance(team_id, str) or not team_id.strip():
+            raise LinearClientError("Issue has no team; cannot infer workflow columns.")
+        states = await fetch_team_workflow_states(api_key, team_id.strip())
+        if not states:
+            raise LinearClientError("Unable to fetch workflow columns for this team.")
+        sid = workflow_state_id_for_target(states, state_target)
+        if not sid:
+            raise LinearClientError(
+                f"Could not resolve workflow state '{state_target}' on this team's board.",
+            )
+        inner["stateId"] = sid
+
+    if not inner:
+        raise LinearClientError(
+            "No updates requested — supply state, title, description, append, "
+            "or priority.",
+        )
+
+    issue_uuid = issue.get("id")
+    if not issue_uuid:
+        raise LinearClientError("Linear responded without an internal issue UUID.")
+
+    data = await linear_graphql_with_key(
+        api_key,
+        _ISSUE_UPDATE_MUTATION,
+        {"issueId": issue_uuid, "input": inner},
+    )
+    mutation = data.get("issueUpdate") or {}
+    if mutation.get("success") is not True:
+        raise LinearClientError(
+            "Linear issueUpdate failed or was declined. Check permissions and IDs."
+        )
+    refreshed = await get_linear_issue(issue_identifier)
+    return refreshed or (mutation.get("issue") or issue)
 
 
 async def get_my_linear_issues(limit: int = 25) -> list[dict[str, Any]]:
