@@ -78,7 +78,7 @@ export default function AgentsPanel({ onGoSettings }: { onGoSettings?: () => voi
         });
 
   return (
-    <div className="max-w-[640px] mx-auto px-6 pt-6 pb-10 space-y-5">
+    <div className="w-full max-w-none box-border px-4 sm:px-6 lg:px-8 pt-6 pb-10 space-y-5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-[18px] font-semibold tracking-tight">Agents</div>
@@ -98,8 +98,7 @@ export default function AgentsPanel({ onGoSettings }: { onGoSettings?: () => voi
       <div className="rounded-2xl border border-white/[0.08] bg-white/[0.02] p-4">
         <svg
           viewBox={`0 0 ${W} ${H}`}
-          className="w-full max-w-[480px] mx-auto block"
-          style={{ height: "min(360px, 52vw)" }}
+          className="w-full block aspect-[420/360] max-h-[min(520px,62vh)] h-auto"
           role="img"
           aria-label="Vmax agent connections"
         >

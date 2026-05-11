@@ -135,7 +135,7 @@ export default function SettingsPanel() {
   }
 
   return (
-    <div className="max-w-[640px] mx-auto px-6 pt-6 pb-10 space-y-6">
+    <div className="w-full max-w-none box-border px-4 sm:px-6 lg:px-8 pt-6 pb-10 space-y-6">
       <div>
         <div className="text-[18px] font-semibold tracking-tight">Settings</div>
         <div className="text-[12.5px] text-white/50 mt-0.5">

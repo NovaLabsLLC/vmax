@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { Bubble } from "./TalkBack";
 import {
   fetchAllMyLinearIssues,
@@ -12,6 +12,8 @@ type Props = {
   onFillTask: (text: string) => void;
 };
 
+type WsBucket = { key: string; label: string; count: number };
+
 /**
  * Lists every **open** Linear issue assigned to the viewer (all connected
  * workspaces). Backed by GET /v1/linear/issues?fetch_all=true (paginated server-side).
@@ -20,7 +22,10 @@ export default function LinearIssuesStrip({ say, onFillTask }: Props) {
   const [rows, setRows] = useState<LinearIssueRow[]>([]);
   const [meta, setMeta] = useState<FetchLinearIssuesResult["workspaces"]>([]);
   const [errs, setErrs] = useState<FetchLinearIssuesResult["errors"]>([]);
-  const [loading, setLoading] = useState(false);
+  /** True until first in-flight completes — avoids flash before mount effect runs. */
+  const [loading, setLoading] = useState(true);
+  /** Limit list to issues from one connected Linear workspace (`meta` ids). */
+  const [workspaceFilter, setWorkspaceFilter] = useState<"all" | string>("all");
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -59,6 +64,55 @@ export default function LinearIssuesStrip({ say, onFillTask }: Props) {
     }
   }, [say]);
 
+  useEffect(() => {
+    void loadAll();
+  }, [loadAll]);
+
+  /** Per-workspace counts for filter chips — backend `meta` when multi-workspace, else derived from rows. */
+  const filterBuckets: WsBucket[] = useMemo(() => {
+    if (meta.length > 1) {
+      return meta.map((w) => ({
+        key: w.id,
+        label: (w.name || "").trim() || w.id,
+        count: w.count ?? 0,
+      }));
+    }
+    if (meta.length === 1) {
+      return [
+        {
+          key: meta[0].id,
+          label: (meta[0].name || "").trim() || meta[0].id,
+          count: meta[0].count ?? 0,
+        },
+      ];
+    }
+    const tally = new Map<string, WsBucket>();
+    for (const r of rows) {
+      const key = String(r._workspace_id || "_");
+      const label = ((r._workspace_name || "").trim() || key) as string;
+      const prev = tally.get(key);
+      tally.set(key, {
+        key,
+        label,
+        count: (prev?.count ?? 0) + 1,
+      });
+    }
+    return [...tally.values()];
+  }, [meta, rows]);
+
+  useEffect(() => {
+    if (workspaceFilter === "all") return;
+    const ok = filterBuckets.some((b) => b.key === workspaceFilter);
+    if (!ok) setWorkspaceFilter("all");
+  }, [workspaceFilter, filterBuckets]);
+
+  const filteredRows = useMemo(() => {
+    if (workspaceFilter === "all") return rows;
+    return rows.filter((r) => String(r._workspace_id || "") === workspaceFilter);
+  }, [rows, workspaceFilter]);
+
+  const showFilters = filterBuckets.length > 1;
+
   return (
     <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-3 space-y-2 w-full">
       <div className="flex flex-wrap items-center gap-2">
@@ -66,7 +120,7 @@ export default function LinearIssuesStrip({ say, onFillTask }: Props) {
           Linear
         </span>
         <span className="text-[11px] text-white/42 flex-1 min-w-[10rem]">
-          Open issues assigned to you (all orgs you connected in Settings).
+          Loads when you open Workspace. All orgs you connected in Settings.
         </span>
         <button
           type="button"
@@ -74,7 +128,7 @@ export default function LinearIssuesStrip({ say, onFillTask }: Props) {
           onClick={() => void loadAll()}
           className="shrink-0 text-[11px] px-3 h-[26px] rounded-md bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/35 text-violet-100 disabled:opacity-45"
         >
-          {loading ? "Fetching…" : "Fetch all issues"}
+          {loading ? "Loading…" : "Refresh"}
         </button>
       </div>
 
@@ -88,15 +142,36 @@ export default function LinearIssuesStrip({ say, onFillTask }: Props) {
         </div>
       ) : null}
 
-      {meta.length > 1 ? (
-        <div className="text-[10px] text-white/38">
-          {meta.map((w) => `${w.name}: ${w.count}`).join(" · ")}
+      {showFilters ? (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/40 shrink-0">
+            Filter
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            <FilterChip
+              label={`All (${rows.length})`}
+              active={workspaceFilter === "all"}
+              onClick={() => setWorkspaceFilter("all")}
+            />
+            {filterBuckets.map((b) => (
+              <FilterChip
+                key={b.key}
+                label={`${b.label} (${b.count})`}
+                active={workspaceFilter === b.key}
+                onClick={() => setWorkspaceFilter(b.key)}
+              />
+            ))}
+          </div>
         </div>
       ) : null}
 
-      {rows.length > 0 ? (
+      {loading && rows.length === 0 ? (
+        <p className="text-[11px] text-white/42 py-2">Loading issues from Linear…</p>
+      ) : null}
+
+      {rows.length > 0 && filteredRows.length > 0 ? (
         <div className="max-h-[min(50vh,28rem)] overflow-y-auto rounded-lg border border-white/[0.06] bg-black/20 divide-y divide-white/[0.05]">
-          {rows.map((row, idx) => {
+          {filteredRows.map((row, idx) => {
             const id = row.identifier || "?";
             const title = (row.title || "(no title)").trim();
             const st = (row.state?.name || "").trim();
@@ -125,9 +200,37 @@ export default function LinearIssuesStrip({ say, onFillTask }: Props) {
             );
           })}
         </div>
-      ) : !loading && rows.length === 0 && errs.length === 0 ? (
-        <p className="text-[11px] text-white/38">Press fetch to load from Linear.</p>
+      ) : !loading && rows.length > 0 && filteredRows.length === 0 ? (
+        <p className="text-[11px] text-white/38">No issues match this workspace filter.</p>
+      ) : null}
+
+      {!loading && rows.length === 0 && errs.length === 0 ? (
+        <p className="text-[11px] text-white/38">No open issues assigned to you in Linear.</p>
       ) : null}
     </div>
+  );
+}
+
+function FilterChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`text-[11px] px-2.5 py-1 rounded-full font-medium transition-colors border ${
+        active
+          ? "bg-violet-500/35 text-violet-50 border-violet-400/50"
+          : "bg-white/[0.04] text-white/70 border-white/[0.1] hover:bg-white/[0.08] hover:text-white"
+      }`}
+    >
+      {label}
+    </button>
   );
 }
