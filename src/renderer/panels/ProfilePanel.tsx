@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 
+import { listLinearWorkspaces } from "../utils/linearWorkspacesApi";
+
 type Profile = { name?: string; email?: string; role?: string };
 
 export default function ProfilePanel({ onSaved }: { onSaved?: (p: Profile) => void }) {
@@ -12,14 +14,29 @@ export default function ProfilePanel({ onSaved }: { onSaved?: (p: Profile) => vo
   }, []);
 
   useEffect(() => {
-    (async () => {
-      const g = await window.exec.getSettings();
-      setLinearOn(!!g.linearApiKey?.trim());
-    })();
-    const off = window.exec.onSettingsUpdated((sett) => {
-      if (typeof sett.linearApiKey === "string") setLinearOn(!!sett.linearApiKey.trim());
+    async function refreshLinearConnected() {
+      try {
+        const ws = await listLinearWorkspaces();
+        setLinearOn(ws.length > 0);
+      } catch {
+        setLinearOn(false);
+      }
+    }
+
+    void refreshLinearConnected();
+    const onFocus = () => void refreshLinearConnected();
+    window.addEventListener("focus", onFocus);
+    const offSettings = window.exec.onSettingsUpdated(() => {
+      void refreshLinearConnected();
     });
-    return () => off();
+    const offLinear = window.exec.onLinearWorkspacesChanged(() => {
+      void refreshLinearConnected();
+    });
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      offSettings();
+      offLinear();
+    };
   }, []);
 
   async function save() {
@@ -69,8 +86,8 @@ export default function ProfilePanel({ onSaved }: { onSaved?: (p: Profile) => vo
         </div>
       </div>
 
-      <Section title="Connected services" hint="Linear is wired from Settings → API keys.">
-        <ServiceRow name="Linear" status={linearOn ? "Personal API key saved" : "not connected"} connected={linearOn} />
+      <Section title="Connected services" hint="Linear is wired from Settings → workspaces (backend).">
+        <ServiceRow name="Linear" status={linearOn ? "workspace(s) connected" : "not connected"} connected={linearOn} />
         <ServiceRow name="GitHub" status="not connected" connected={false} />
         <ServiceRow name="Cursor" status="auto-detected via macOS" connected />
       </Section>

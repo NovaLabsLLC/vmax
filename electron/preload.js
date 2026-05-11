@@ -99,7 +99,19 @@ contextBridge.exposeInMainWorld("exec", {
   saveProfile: (p) => ipcRenderer.invoke("exec:save-profile", p),
   getSettings: () => ipcRenderer.invoke("exec:get-settings"),
   saveSettings: (s) => ipcRenderer.invoke("exec:save-settings", s),
-  linearVerify: (apiKey) => ipcRenderer.invoke("linear:verify", { apiKey: apiKey || "" }),
+
+  linearWorkspacesList: () => ipcRenderer.invoke("linear:list"),
+  linearWorkspacesAdd: (p) =>
+    ipcRenderer.invoke("linear:add", p ?? { apiKey: "", label: "" }),
+  linearWorkspacesRemove: (id) => ipcRenderer.invoke("linear:remove", { id }),
+  linearWorkspacesRename: (id, label) =>
+    ipcRenderer.invoke("linear:rename", { id, label }),
+  onLinearWorkspacesChanged: (cb) => {
+    const h = () => cb();
+    ipcRenderer.on("linear:workspaces-changed", h);
+    return () => ipcRenderer.removeListener("linear:workspaces-changed", h);
+  },
+
   onSettingsUpdated: (cb) => {
     const h = (_e, settings) => cb(settings || {});
     ipcRenderer.on("exec:settings-updated", h);

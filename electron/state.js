@@ -1,7 +1,7 @@
 // Persisted app state.
 //
 // One JSON blob in app.getPath("userData") with shape:
-//   { profile, settings, onboardedAt, lastRepo, recentRepos }
+//   { profile, settings, onboardedAt, lastRepo, recentRepos, linearWorkspaces? }
 // Read/written synchronously — the file is tiny and only touched from main.
 //
 // Note: there is no longer an applySettingsToEnv helper here. AI keys

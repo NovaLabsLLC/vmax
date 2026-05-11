@@ -46,6 +46,7 @@ app.on("second-instance", () => {
 // handles this automatically as long as ipcBus is required first below).
 require("./ipcBus.js").register();
 require("./ipc/settings.js").register();
+require("./ipc/linearWorkspaces.js").register();
 require("./ipc/sessions.js").register();
 require("./ipc/repo.js").register();
 require("./ipc/cursorBridge.js").register();

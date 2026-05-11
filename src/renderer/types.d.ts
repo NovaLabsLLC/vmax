@@ -67,6 +67,18 @@ export type VmaxPanelPayload = {
   executionRecommendation?: string;
 };
 
+/** Linear workspace row surfaced by main-process IPC — identifiers + preview only. */
+export type LinearWorkspacePreview = {
+  id: string;
+  label: string;
+  workspace_name: string;
+  workspace_url_key: string;
+  viewer_name: string;
+  viewer_email: string;
+  added_at: number;
+  key_preview: string;
+};
+
 export type VmaxPanelAction =
   | { type: "send-cursor"; prompt: string }
   | { type: "run-claude"; prompt: string }
@@ -197,7 +209,6 @@ declare global {
       getSettings: () => Promise<{
         openaiApiKey: string;
         anthropicApiKey: string;
-        linearApiKey: string;
         cursorAutoSend: boolean;
         defaultProvider: "auto" | "openai" | "claude";
         talkBack: boolean;
@@ -205,13 +216,30 @@ declare global {
       saveSettings: (s: Partial<{
         openaiApiKey: string;
         anthropicApiKey: string;
-        linearApiKey: string;
         cursorAutoSend: boolean;
         defaultProvider: "auto" | "openai" | "claude";
         talkBack: boolean;
       }>) => Promise<any>;
-      linearVerify: (apiKey?: string) => Promise<{ ok: boolean; userName?: string; email?: string; error?: string }>;
-      onSettingsUpdated: (cb: (s: { openaiApiKey?: string; anthropicApiKey?: string; linearApiKey?: string; cursorAutoSend?: boolean; defaultProvider?: string; talkBack?: boolean }) => void) => () => void;
+      onSettingsUpdated: (cb: (s: { openaiApiKey?: string; anthropicApiKey?: string; cursorAutoSend?: boolean; defaultProvider?: string; talkBack?: boolean }) => void) => () => void;
+      linearWorkspacesList: () => Promise<{
+        workspaces: LinearWorkspacePreview[];
+        count: number;
+      }>;
+      linearWorkspacesAdd: (
+        payload: { apiKey: string; label: string },
+      ) => Promise<
+        | { ok: true; workspace: LinearWorkspacePreview }
+        | { ok: false; error: string }
+      >;
+      linearWorkspacesRemove: (id: string) => Promise<{ ok: true } | { ok: false; error?: string }>;
+      linearWorkspacesRename: (
+        id: string,
+        label: string,
+      ) =>
+        Promise<
+          { ok: true; workspace: LinearWorkspacePreview } | { ok: false; error?: string }
+        >;
+      onLinearWorkspacesChanged: (cb: () => void) => () => void;
       listSessions: () => Promise<{ id: string; title: string; updatedAt: number; createdAt: number; repoName: string | null; repoPath: string | null }[]>;
       getSession: (id: string) => Promise<any | null>;
       saveSession: (s: any) => Promise<any>;

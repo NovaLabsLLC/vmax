@@ -10,7 +10,6 @@ import {
 type Settings = {
   openaiApiKey: string;
   anthropicApiKey: string;
-  linearApiKey: string;
 };
 
 type CliInfo = { installed: boolean; version?: string; authed?: boolean; authVia?: "env" | "file" };
@@ -19,7 +18,6 @@ type CliStatus = { claude: CliInfo; codex: CliInfo };
 const DEFAULT: Settings = {
   openaiApiKey: "",
   anthropicApiKey: "",
-  linearApiKey: "",
 };
 
 export default function SettingsPanel() {
@@ -27,7 +25,7 @@ export default function SettingsPanel() {
   const [saved, setSaved] = useState(false);
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [busy, setBusy] = useState<{ tool: "claude" | "codex"; kind: "login" | "install" } | null>(null);
-  // Linear: multi-workspace store on the backend, talked to via plain HTTP.
+  // Linear: stored in Electron userData + mirrored to FastAPI when the server runs.
   const [linearWorkspaces, setLinearWorkspaces] = useState<LinearWorkspace[]>([]);
   const [linearLoading, setLinearLoading] = useState(false);
   const [linearListError, setLinearListError] = useState<string | null>(null);
@@ -51,15 +49,18 @@ export default function SettingsPanel() {
 
   useEffect(() => {
     (async () => {
-      const cur = (await window.exec.getSettings()) as any;
+      const cur = await window.exec.getSettings();
       setS({
         openaiApiKey: cur.openaiApiKey || "",
         anthropicApiKey: cur.anthropicApiKey || "",
-        linearApiKey: cur.linearApiKey || "",
       });
     })();
     void refreshCli();
     void refreshLinearWorkspaces();
+    const offLinear = window.exec.onLinearWorkspacesChanged(() => {
+      void refreshLinearWorkspaces();
+    });
+    return () => offLinear();
   }, []);
 
   async function refreshCli() {
@@ -138,7 +139,7 @@ export default function SettingsPanel() {
       <div>
         <div className="text-[18px] font-semibold tracking-tight">Settings</div>
         <div className="text-[12.5px] text-white/50 mt-0.5">
-          AI keys live in your Vmax user data and are sent to OpenAI / Anthropic from this app. Linear workspaces are stored on the Vmax backend — raw keys never come back to the client, you'll only see a "…abcd" preview.
+          AI keys live in your Vmax user data (OpenAI / Anthropic). Linear API keys persist in app data locally (encrypted where macOS supports it) and are copied to your FastAPI process when it’s running — you only ever see an ID and a trailing “…abcd” preview here.
         </div>
       </div>
 
@@ -400,14 +401,12 @@ function LinearWorkspaceList({
 
       {listError ? (
         <div className="text-[11.5px] text-rose-300/90 leading-snug">
-          Couldn’t reach the Vmax backend: {listError}. Start it with{" "}
-          <span className="font-mono text-white/70">uvicorn app.main:app --reload</span>{" "}
-          from <span className="font-mono text-white/70">backend/</span>.
+          Couldn’t load workspaces: {listError}
         </div>
       ) : workspaces.length === 0 ? (
         <div className="text-[11.5px] text-white/45 leading-snug">
-          No workspaces connected. Paste a Linear personal API key below — the backend
-          verifies it, stores it, and you can connect as many as you want.
+          No workspaces connected. Paste a Linear personal API key — Vmax checks it against Linear&apos;s
+          GraphQL API, saves it locally, and syncs it to your backend when reachable.
         </div>
       ) : (
         <ul className="space-y-2">
