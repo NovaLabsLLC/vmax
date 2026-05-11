@@ -17,6 +17,7 @@ All return JSON; all are POST except `/healthz`.
 | POST   | `/v1/plan`               | Plan a task against repo + diff                          |
 | POST   | `/v1/explain-failure`    | Diagnose a failed shell command                          |
 | POST   | `/v1/summarize-diff`     | Summarize a git diff                                     |
+| POST   | `/v1/task`               | Turn a freeform prompt into a strict `VmaxTask` (planner) |
 
 `/v1/ask`, `/v1/plan`, `/v1/explain-failure`, `/v1/summarize-diff` all
 return a structured response shaped like:
@@ -77,4 +78,43 @@ expose this to the internet without first adding an auth check.
 - If only `ANTHROPIC_API_KEY` is set, Anthropic is used.
 - Whisper transcription and TTS always require `OPENAI_API_KEY`.
 
-Override models via `OPENAI_MODEL`, `OPENAI_MODEL_TEXT`, `ANTHROPIC_MODEL`.
+Override models via `OPENAI_MODEL`, `OPENAI_MODEL_TEXT`, `ANTHROPIC_MODEL`,
+`OPENAI_MODEL_TASK`, `ANTHROPIC_MODEL_TASK`. The `_TASK` variants drive
+the cheap/fast model used by `POST /v1/task` so the task planner stays
+snappy without affecting `/v1/ask` quality.
+
+## /v1/task shape
+
+```json
+// request
+{
+  "prompt": "...",
+  "repo": { "ok": true, "name": "...", "branch": "...", "root": "...",
+            "changed_files": ["..."] },
+  "target_branch": "main"
+}
+// response
+{
+  "ok": true,
+  "task": {
+    "id": "task_…",
+    "title": "...", "goal": "...",
+    "repo": { "name": "...", "path": "...",
+              "baseBranch": "main", "targetBranch": "main" },
+    "type": "feature", "priority": "medium",
+    "filesToInspect": ["..."], "constraints": ["..."],
+    "successCriteria": ["..."], "validationCommands": ["npm run test"],
+    "riskLevel": "low",
+    "approvalPolicy": { "requireApprovalBefore": ["..."] },
+    "agent": { "preferred": "claude_code", "reason": "..." },
+    "outputFormat": ["..."]
+  },
+  "parse_warning": false,
+  "error": null
+}
+```
+
+If the model returns malformed JSON, the server still returns a safe
+fallback `task` with `parse_warning: true` and `error` set to the parse
+hint. `ok` is `false` only when the prompt is empty or the model reply
+fails final validation.

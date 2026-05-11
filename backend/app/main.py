@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routes import assistant, health, voice
+from .routes import assistant, health, task, voice
 
 
 def create_app() -> FastAPI:
@@ -30,6 +30,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(voice.router, prefix="/v1")
     app.include_router(assistant.router, prefix="/v1")
+    app.include_router(task.router, prefix="/v1")
 
     return app
 

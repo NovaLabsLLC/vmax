@@ -27,6 +27,12 @@ class Settings:
     openai_model_text: str = "gpt-4o-mini"
     anthropic_model: str = "claude-sonnet-4-6"
 
+    # Task planner uses the cheapest/fastest variants — kept on a separate
+    # knob from the structured-response models so we can downgrade /v1/task
+    # latency without touching /v1/ask quality.
+    openai_model_task: str = "gpt-4o-mini"
+    anthropic_model_task: str = "claude-haiku-4-5-20251001"
+
     host: str = "127.0.0.1"
     port: int = 8000
 
@@ -65,6 +71,13 @@ def _load() -> Settings:
         openai_model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
         openai_model_text=os.environ.get("OPENAI_MODEL_TEXT", "").strip() or "",
         anthropic_model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6").strip() or "claude-sonnet-4-6",
+        openai_model_task=(
+            os.environ.get("OPENAI_MODEL_TASK", "gpt-4o-mini").strip() or "gpt-4o-mini"
+        ),
+        anthropic_model_task=(
+            os.environ.get("ANTHROPIC_MODEL_TASK", "claude-haiku-4-5-20251001").strip()
+            or "claude-haiku-4-5-20251001"
+        ),
         host=os.environ.get("VMAX_HOST", "127.0.0.1").strip() or "127.0.0.1",
         port=port,
         allowed_origins=origins,

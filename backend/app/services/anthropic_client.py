@@ -29,6 +29,8 @@ async def call_messages_structured(
     turns: list[HistoryTurn],
     screenshot_base64: str | None,
     max_tokens: int = 2000,
+    temperature: float | None = None,
+    model: str | None = None,
 ) -> str:
     """Returns the concatenated text content from the model reply."""
     key = _require_key()
@@ -56,12 +58,14 @@ async def call_messages_structured(
         role = "assistant" if turn.role == "assistant" else "user"
         messages.append({"role": role, "content": content})
 
-    body = {
-        "model": settings.anthropic_model,
+    body: dict[str, Any] = {
+        "model": model or settings.anthropic_model,
         "max_tokens": max_tokens,
         "system": system,
         "messages": messages,
     }
+    if temperature is not None:
+        body["temperature"] = temperature
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
         res = await client.post(

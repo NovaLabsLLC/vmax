@@ -57,8 +57,13 @@ async def call_chat_structured(
     screenshot_base64: str | None,
     temperature: float = 0.85,
     max_tokens: int = 1800,
+    model: str | None = None,
 ) -> str:
-    """Returns the raw model text. Caller must json-parse + validate."""
+    """Returns the raw model text. Caller must json-parse + validate.
+
+    `model` defaults to the structured-response model; the task planner
+    overrides it with the cheaper/faster `openai_model_task` variant.
+    """
     key = _require_key()
     seq = list(turns)
     msgs: list[dict[str, Any]] = [{"role": "system", "content": system}]
@@ -73,7 +78,7 @@ async def call_chat_structured(
             msgs.append({"role": turn.role, "content": turn.text})
 
     body = {
-        "model": settings.openai_model,
+        "model": model or settings.openai_model,
         "messages": msgs,
         "response_format": {"type": "json_object"},
         "temperature": temperature,
