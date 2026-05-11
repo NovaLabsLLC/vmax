@@ -9,6 +9,11 @@
 //      previous {ok, task?, parseWarning?, error?} return shape so
 //      callers (electron/ipc/ai.js → ai:task) don't need to change.
 //
+// The backend is repo-agnostic: only the prompt is sent. The returned
+// VmaxTask still has a `repo` block on it (placeholder values from the
+// server) and taskTrigger.js fills in the real repo path from
+// readState().lastRepo when it actually spawns the agent.
+//
 // When the backend is unreachable we deliberately do NOT fabricate a
 // VmaxTask on the client — the renderer just gets `{ ok: false, error }`
 // so it can show a "backend is down" placeholder instead of a fake
@@ -69,18 +74,6 @@ const VmaxTaskSchema = z.object({
 /** The half the LLM fills — `id` and `repo` come from the host. */
 const VmaxTaskLLMPartSchema = VmaxTaskSchema.omit({ id: true, repo: true });
 
-function serializeRepo(repo) {
-  if (!repo || typeof repo !== "object") return null;
-  return {
-    ok: repo.ok !== false,
-    name: repo.name ?? null,
-    branch: repo.branch ?? null,
-    root: repo.root ?? null,
-    path: repo.path ?? null,
-    changed_files: Array.isArray(repo.changedFiles) ? repo.changedFiles : [],
-  };
-}
-
 async function postTask(body) {
   const url = `${BACKEND_URL}/v1/task`;
   const ctrl = new AbortController();
@@ -113,7 +106,12 @@ async function postTask(body) {
 }
 
 /**
- * Create a strict VmaxTask from a user prompt + optional repo snapshot.
+ * Create a strict VmaxTask from a user prompt.
+ *
+ * The backend is repo-agnostic — only the prompt is sent. The Electron
+ * host substitutes its own `lastRepo` from state when it spawns the
+ * agent (see electron/ipc/taskTrigger.js).
+ *
  * Returns one of:
  *   - `{ ok: true, task }` on success.
  *   - `{ ok: false, task, parseWarning: true, error }` when the server
@@ -126,21 +124,15 @@ async function postTask(body) {
  * Never throws.
  *
  * @param {object} args
- * @param {string} args.prompt          User's freeform request.
- * @param {object} [args.repo]          Output of utils/repoContext.scanRepo, or null.
- * @param {string} [args.targetBranch]  Optional explicit target branch.
+ * @param {string} args.prompt  User's freeform request.
  */
-async function createVmaxTask({ prompt, repo, targetBranch } = {}) {
+async function createVmaxTask({ prompt } = {}) {
   const text = String(prompt || "").trim();
   if (!text) return { ok: false, error: "empty prompt" };
 
   let envelope;
   try {
-    envelope = await postTask({
-      prompt: text,
-      repo: serializeRepo(repo),
-      target_branch: targetBranch || null,
-    });
+    envelope = await postTask({ prompt: text });
   } catch (err) {
     // Backend down / network error / non-2xx. Return the error string
     // only — no fabricated task. The renderer reads `ok=false` + no

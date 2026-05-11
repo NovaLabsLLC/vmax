@@ -309,18 +309,23 @@ export default function OverlayApp() {
           <MicIcon level={voice.level} listening={voice.state === "listening"} />
         </button>
 
+        {/* Text chat — sibling to mic, distinct rose tint so the two
+            input modes are obviously different colors. */}
+        <button
+          title={chatOpen ? "Hide chat" : "Text chat"}
+          onClick={() => setChatOpen((o) => !o)}
+          className={`no-drag h-10 w-10 rounded-full flex items-center justify-center transition-all active:scale-[0.94] shrink-0 ${
+            chatOpen
+              ? "bg-rose-500/95 text-white shadow-[0_0_22px_-3px_rgba(244,63,94,0.95)]"
+              : "bg-rose-500/85 text-white hover:bg-rose-500 shadow-[0_0_18px_-4px_rgba(244,63,94,0.85)]"
+          }`}
+        >
+          <ChatIcon />
+        </button>
+
         <Divider />
 
         <div className="flex items-center gap-2 shrink-0">
-        <PillButton
-          title={chatOpen ? "Hide chat" : "Text chat"}
-          onClick={() => setChatOpen((o) => !o)}
-          state={chatOpen ? "active" : "idle"}
-          activeBg="bg-violet-500/88 text-white shadow-[0_0_18px_-4px_rgba(139,92,246,0.85)]"
-        >
-          <ChatIcon />
-        </PillButton>
-
         <PillButton
           title="Set API keys"
           onClick={() => void openSettings()}
@@ -373,7 +378,11 @@ export default function OverlayApp() {
         ) : null}
       </div>
 
-      <div className="flex flex-col min-h-0">
+      <div
+        className={`flex flex-col min-h-0 min-w-0 ${
+          chatOpen || showVmaxBody ? "w-[560px] max-w-[560px]" : ""
+        }`}
+      >
         <OverlayMiniChat
           talkBack={talkBack}
           getScreenshot={() => screen.getLatestFrame()}
@@ -389,7 +398,7 @@ export default function OverlayApp() {
         ) : null}
 
         {showVmaxBody ? (
-          <div className="no-drag flex flex-col px-2 pb-2 pt-0">
+          <div className="no-drag flex flex-col px-2 pb-2 pt-0 w-full min-w-0">
             {vmaxUi.phase === "loading" ? (
               <div className="rounded-[16px] border border-white/[0.1] bg-black/[0.2] p-3 space-y-2 animate-pulse">
                 <div className="h-3 rounded bg-white/[0.12] w-1/4" />

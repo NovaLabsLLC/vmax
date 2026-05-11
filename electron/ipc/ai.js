@@ -12,10 +12,9 @@ const {
   synthesizeSpeech,
   askAssistant,
 } = require("../../utils/aiClient.js");
-const { summarizeDiffText, scanRepo } = require("../../utils/repoContext.js");
+const { summarizeDiffText } = require("../../utils/repoContext.js");
 const { createProject } = require("../../utils/projects.js");
 const { createVmaxTask } = require("../../utils/taskSchema.js");
-const { readState } = require("../state.js");
 
 function register() {
   ipcMain.handle("ai:transcribe", (_evt, payload) => transcribeAudio(payload));
@@ -28,24 +27,13 @@ function register() {
     summarizeDiff({ ...payload, fallback: summarizeDiffText })
   );
 
-  // Strict VmaxTask creation. The renderer passes `{ prompt }`; we scan the
-  // last-active repo here so the model has real file paths to anchor on.
-  // Caller can override the repo by passing `{ prompt, repo }`.
-  ipcMain.handle("ai:task", async (_evt, payload) => {
+  // Strict VmaxTask creation. The renderer just passes `{ prompt }` — the
+  // backend is repo-agnostic, and taskTrigger.js fills in the actual repo
+  // path from state when it spawns an agent.
+  ipcMain.handle("ai:task", (_evt, payload) => {
     const prompt = String((payload && payload.prompt) || "").trim();
     if (!prompt) return { ok: false, error: "empty prompt" };
-    let repo = payload && payload.repo;
-    if (!repo) {
-      const repoPath = readState().lastRepo;
-      if (repoPath) {
-        try { repo = await scanRepo(repoPath); } catch { /* swallow — task creation works without repo */ }
-      }
-    }
-    return createVmaxTask({
-      prompt,
-      repo,
-      targetBranch: payload && payload.targetBranch,
-    });
+    return createVmaxTask({ prompt });
   });
 }
 

@@ -1,20 +1,16 @@
 import React, { useState } from "react";
 
-type Step = 0 | 1 | 2 | 3;
+type Step = 0 | 1 | 2;
 
 export default function Onboarding({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState<Step>(0);
   const [profile, setProfile] = useState<{ name: string; role: string }>({ name: "", role: "" });
   const [busy, setBusy] = useState(false);
 
-  async function finish(skipRepo?: boolean) {
+  async function finish() {
     setBusy(true);
     try {
       if (profile.name || profile.role) await window.exec.saveProfile(profile);
-      if (!skipRepo) {
-        const p = await window.exec.pickRepo();
-        if (p) await window.exec.rememberRepo(p);
-      }
       await window.exec.finishOnboarding();
       onDone();
     } finally {
@@ -35,14 +31,14 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
             <Card>
               <Hero />
               <p className="text-[13px] text-white/70 leading-relaxed mt-4">
-                Vmax is a control layer for coding agents. It sees your repo and task, plans, runs checks,
+                Vmax is a control layer for coding agents. It plans, runs checks,
                 explains failures, and tells Cursor exactly what to do next.
               </p>
               <p className="text-[12.5px] text-white/45 leading-relaxed mt-2">
-                We'll set up a profile and an active repo. Takes ~30 seconds.
+                We'll set up a profile and a couple of permissions. Takes ~30 seconds.
               </p>
               <Footer
-                left={<span className="text-[11px] text-white/35">Step 1 of 4</span>}
+                left={<span className="text-[11px] text-white/35">Step 1 of 3</span>}
                 right={<Primary onClick={() => setStep(1)}>Get started</Primary>}
               />
             </Card>
@@ -84,26 +80,7 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
               </ul>
               <Footer
                 left={<Secondary onClick={() => setStep(1)}>Back</Secondary>}
-                right={<Primary onClick={() => setStep(3)}>Next</Primary>}
-              />
-            </Card>
-          )}
-
-          {step === 3 && (
-            <Card>
-              <Heading title="Pick your active repo" sub="You can change it any time." />
-              <p className="text-[12.5px] text-white/55 leading-relaxed mt-3">
-                Vmax opens a folder picker. Choose a git repo to watch. We'll load its branch, changed files,
-                and diff into the Command Center.
-              </p>
-              <Footer
-                left={<Secondary onClick={() => setStep(2)}>Back</Secondary>}
-                right={
-                  <div className="flex gap-2">
-                    <Secondary onClick={() => finish(true)} disabled={busy}>Skip for now</Secondary>
-                    <Primary onClick={() => finish(false)} disabled={busy}>{busy ? "Finishing…" : "Pick repo"}</Primary>
-                  </div>
-                }
+                right={<Primary onClick={() => void finish()} disabled={busy}>{busy ? "Finishing…" : "Finish"}</Primary>}
               />
             </Card>
           )}
@@ -127,7 +104,7 @@ function Hero() {
 function Steps({ current }: { current: number }) {
   return (
     <div className="flex items-center gap-1.5 mb-5">
-      {[0, 1, 2, 3].map((i) => (
+      {[0, 1, 2].map((i) => (
         <div key={i} className={`h-1 flex-1 rounded-full ${i <= current ? "bg-white" : "bg-white/10"}`} />
       ))}
     </div>

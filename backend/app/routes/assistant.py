@@ -3,7 +3,12 @@
 Each route prepares the system prompt + turn list, runs it through the LLM
 router, and returns a uniform `StructuredEnvelope`. The Electron client
 maps that envelope into UI-shaped objects (Plan / Failure / Diff /
-AskPanel) on its side."""
+AskPanel) on its side.
+
+These routes are intentionally repo-agnostic — no `repo` field is
+accepted on the wire. Earlier versions piped the user's repo snapshot
+into the system prompt, which caused the model to hallucinate about
+untracked files when users asked unrelated questions like "hello"."""
 
 from __future__ import annotations
 
@@ -29,7 +34,6 @@ from ..services.prompts import (
     FAILURE_SYSTEM,
     PLAN_SYSTEM,
 )
-from ..services.repo_context import render_repo_context
 from ..services.structured import malformed_structured_response
 
 router = APIRouter()
@@ -42,15 +46,13 @@ DIFF_TRUNCATE_CHARS = 30_000
 async def ask(body: AskRequest) -> StructuredEnvelope:
     meta = is_meta_capability_question(body.question)
 
-    if meta:
-        context_block = (
-            "No repo or screen context applies to this turn (capability / "
-            "meta question)."
-        )
-    elif body.repo and body.repo.ok:
-        context_block = render_repo_context(task=None, repo=body.repo, include_diff=False)
-    else:
-        context_block = "Context: no repo loaded \u2014 general developer Q&A."
+    context_block = (
+        "No repo or screen context applies to this turn (capability / "
+        "meta question)."
+        if meta
+        else "Context: general developer Q&A. Do not assume the user has a "
+        "specific repo open."
+    )
 
     system_body = ASK_META_SYSTEM if meta else ASK_STRUCTURED_SYSTEM
     system_with_context = f"{system_body}\n\n--- Live context ---\n{context_block}"
@@ -84,12 +86,13 @@ async def ask(body: AskRequest) -> StructuredEnvelope:
 
 @router.post("/plan", response_model=StructuredEnvelope)
 async def plan(body: PlanRequest) -> StructuredEnvelope:
-    user = render_repo_context(
-        task=body.task or None,
-        repo=body.repo,
-        diff=body.diff,
-        include_diff=True,
-    )
+    lines: list[str] = []
+    if body.task:
+        lines.append(f"Task:\n{body.task}")
+    if body.diff:
+        lines.append(f"\n--- diff (truncated) ---\n{body.diff[:DIFF_TRUNCATE_CHARS]}")
+    user = "\n".join(lines) if lines else "(no task description provided)"
+
     turns = [HistoryTurn(role="user", text=user)]
     result = await llm_router.call_structured_response(
         system=PLAN_SYSTEM,
@@ -101,9 +104,9 @@ async def plan(body: PlanRequest) -> StructuredEnvelope:
 
 @router.post("/explain-failure", response_model=StructuredEnvelope)
 async def explain_failure(body: ExplainFailureRequest) -> StructuredEnvelope:
-    base = render_repo_context(task=body.task or None, repo=body.repo)
+    head = f"Task:\n{body.task}\n\n" if body.task else ""
     user = (
-        f"{base}\n\nCommand: {body.command}\n\n"
+        f"{head}Command: {body.command}\n\n"
         f"--- Output (last {OUTPUT_TRUNCATE_CHARS} chars) ---\n"
         f"{(body.output or '')[-OUTPUT_TRUNCATE_CHARS:]}"
     )

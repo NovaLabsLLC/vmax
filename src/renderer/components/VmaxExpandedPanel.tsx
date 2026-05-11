@@ -26,7 +26,7 @@ export default function VmaxExpandedPanel({
 
   return (
     <div
-      className="no-drag flex flex-col rounded-[16px] overflow-hidden
+      className="no-drag flex flex-col min-w-0 w-full rounded-[16px] overflow-hidden
                  border border-white/[0.12] bg-black/[0.22] backdrop-blur-xl
                  shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_24px_48px_-16px_rgba(0,0,0,0.65)]"
     >
@@ -208,15 +208,15 @@ function CursorPromptBlock({ text }: { text: string }) {
     setTimeout(() => setCopied(false), 1200);
   };
   return (
-    <div className="rounded-xl border border-violet-400/25 bg-violet-500/[0.07] overflow-hidden">
-      <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-violet-300/15">
-        <span className="text-[9.5px] uppercase tracking-[0.14em] text-violet-200/80 font-semibold">
+    <div className="min-w-0 rounded-xl border border-violet-400/25 bg-violet-500/[0.07] overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 border-b border-violet-300/15">
+        <span className="min-w-0 truncate text-[9.5px] uppercase tracking-[0.14em] text-violet-200/80 font-semibold">
           Cursor prompt — paste to build it
         </span>
         <button
           type="button"
           onClick={onClick}
-          className={`text-[10.5px] px-2 py-0.5 rounded-md border transition-colors
+          className={`shrink-0 text-[10.5px] px-2 py-0.5 rounded-md border transition-colors
             ${copied
               ? "bg-emerald-500/25 text-emerald-100 border-emerald-300/35"
               : "bg-violet-500/15 text-violet-100 border-violet-300/30 hover:bg-violet-500/25"}`}
@@ -224,7 +224,7 @@ function CursorPromptBlock({ text }: { text: string }) {
           {copied ? "copied" : "copy"}
         </button>
       </div>
-      <pre className="text-[11.5px] text-violet-50/95 whitespace-pre-wrap leading-relaxed px-2.5 py-2">
+      <pre className="text-[11.5px] text-violet-50/95 whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed px-2.5 py-2 max-h-[260px] overflow-y-auto">
 {text}
       </pre>
     </div>

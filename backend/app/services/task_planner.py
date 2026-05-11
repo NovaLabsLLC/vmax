@@ -23,12 +23,9 @@ from pydantic import ValidationError
 
 from ..config import settings
 from ..schemas.task import (
-    AgentChoice,
-    ApprovalPolicy,
     VmaxTask,
     VmaxTaskLLMPart,
     VmaxTaskRepo,
-    VmaxTaskRepoSnapshot,
 )
 from . import anthropic_client, openai_client
 
@@ -128,19 +125,6 @@ class TaskResult:
     error: str | None = None
 
 
-def _render_repo_snapshot(repo: VmaxTaskRepoSnapshot | None) -> str:
-    if not repo or not repo.ok:
-        return "No repo loaded."
-    lines = [f"Repo: {repo.name or '(unknown)'}"]
-    if repo.branch:
-        lines.append(f"Branch: {repo.branch}")
-    top = (repo.changed_files or [])[:30]
-    if top:
-        joined = "\n".join(f"  {f}" for f in top)
-        lines.append(f"Changed files (top 30):\n{joined}")
-    return "\n".join(lines)
-
-
 def _parse_json(raw: str) -> dict[str, Any]:
     if not raw:
         raise ValueError("empty AI response")
@@ -186,22 +170,22 @@ def _flatten_validation_errors(err: ValidationError) -> str:
     return "; ".join(bits)
 
 
-def _assemble_task(
-    *,
-    llm_part: dict[str, Any],
-    repo: VmaxTaskRepoSnapshot | None,
-    target_branch: str | None,
-) -> VmaxTask:
-    """Stitch the LLM-filled half + host-supplied id/repo into a full task.
+def _assemble_task(*, llm_part: dict[str, Any]) -> VmaxTask:
+    """Stitch the LLM-filled half + a placeholder repo block into a full task.
+
+    The server doesn't know which repo this task is for — the Electron
+    host fills in the actual path from its own `lastRepo` state when it
+    triggers an agent. The `repo` block stays on the wire so the Zod
+    schema in utils/taskSchema.js still validates.
 
     Validates with Pydantic at the end so the route can decide whether
     to flag `parseWarning` if something slipped through.
     """
     repo_block = VmaxTaskRepo(
-        name=(repo.name if repo else None) or "(unknown)",
-        path=(repo.root if repo else None) or (repo.path if repo else None) or "",
-        baseBranch=(repo.branch if repo else None) or "main",
-        targetBranch=target_branch or (repo.branch if repo else None) or "main",
+        name="(unknown)",
+        path="",
+        baseBranch="main",
+        targetBranch="main",
     )
 
     payload: dict[str, Any] = {
@@ -254,13 +238,12 @@ async def _call_fast_llm(*, system: str, user: str) -> str:
     )
 
 
-async def create_task(
-    *,
-    prompt: str,
-    repo: VmaxTaskRepoSnapshot | None,
-    target_branch: str | None,
-) -> TaskResult:
-    """Create a strict VmaxTask from a user prompt + optional repo snapshot.
+async def create_task(*, prompt: str) -> TaskResult:
+    """Create a strict VmaxTask from a user prompt.
+
+    No repo snapshot is sent — the server doesn't know which repo the
+    task is for. The Electron host fills in the actual repo path from
+    its own state when it triggers the agent.
 
     Never raises past HTTPException (provider-key missing): on parse /
     validation failure we return a safe fallback task with
@@ -271,10 +254,7 @@ async def create_task(
     if not text:
         return TaskResult(False, None, False, "empty prompt")
 
-    user = (
-        f"User request:\n{text[:4000]}\n\n"
-        f"--- Repo snapshot ---\n{_render_repo_snapshot(repo)}"
-    )
+    user = f"User request:\n{text[:4000]}"
 
     try:
         raw = await _call_fast_llm(system=SYSTEM_PROMPT, user=user)
@@ -284,37 +264,29 @@ async def create_task(
         # own network-failure fallback.
         raise
     except Exception as err:  # noqa: BLE001 — unknown transport errors
-        task = _assemble_task(
-            llm_part=FALLBACK_LLM_PART, repo=repo, target_branch=target_branch
-        )
+        task = _assemble_task(llm_part=FALLBACK_LLM_PART)
         return TaskResult(False, task, True, str(err))
 
     try:
         obj = _parse_json(raw)
     except ValueError as err:
-        task = _assemble_task(
-            llm_part=FALLBACK_LLM_PART, repo=repo, target_branch=target_branch
-        )
+        task = _assemble_task(llm_part=FALLBACK_LLM_PART)
         return TaskResult(False, task, True, str(err))
 
     try:
         parsed = VmaxTaskLLMPart.model_validate(obj)
     except ValidationError as err:
-        task = _assemble_task(
-            llm_part=FALLBACK_LLM_PART, repo=repo, target_branch=target_branch
-        )
+        task = _assemble_task(llm_part=FALLBACK_LLM_PART)
         return TaskResult(False, task, True, _flatten_validation_errors(err))
 
     # Use camelCase for assembly so the alias-aware schemas validate cleanly.
     llm_dict = parsed.model_dump(by_alias=True)
     try:
-        task = _assemble_task(llm_part=llm_dict, repo=repo, target_branch=target_branch)
+        task = _assemble_task(llm_part=llm_dict)
     except ValidationError as err:
         # Should be unreachable (parsed already validated), but keep the
         # belt-and-suspenders behaviour of the JS final guard.
-        fallback = _assemble_task(
-            llm_part=FALLBACK_LLM_PART, repo=repo, target_branch=target_branch
-        )
+        fallback = _assemble_task(llm_part=FALLBACK_LLM_PART)
         return TaskResult(False, fallback, True, _flatten_validation_errors(err))
 
     return TaskResult(True, task, False, None)

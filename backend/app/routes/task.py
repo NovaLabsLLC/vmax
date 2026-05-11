@@ -19,11 +19,7 @@ router = APIRouter()
 
 @router.post("/task", response_model=TaskResponse)
 async def create_task(body: TaskRequest) -> TaskResponse:
-    result = await task_planner.create_task(
-        prompt=body.prompt,
-        repo=body.repo,
-        target_branch=body.target_branch,
-    )
+    result = await task_planner.create_task(prompt=body.prompt)
     return TaskResponse(
         ok=result.ok,
         task=result.task,

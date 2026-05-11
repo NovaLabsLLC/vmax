@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { RepoContext } from "../types";
 import { deriveSpeakable, toSpeakableLine } from "../utils/talkBackText";
 
 type ChatMsg = { role: "user" | "assistant"; text: string; ts: number };
@@ -9,16 +8,6 @@ function parseAskActionTag(text: string): { prose: string } {
   const m = text.match(/\[\[action\s+[a-z-]+[^\]]*\]\]/i);
   if (!m) return { prose: text };
   return { prose: text.replace(m[0], "").trim() };
-}
-
-async function ensureRepoContext(repoRef: React.MutableRefObject<RepoContext | undefined>): Promise<void> {
-  if (repoRef.current?.ok) return;
-  const path = await window.exec.getLastRepo();
-  if (!path) {
-    repoRef.current = { ok: false, error: "no-repo" };
-    return;
-  }
-  repoRef.current = await window.exec.scanRepo(path);
 }
 
 function useOverlaySpeak(talkBack: boolean) {
@@ -103,7 +92,6 @@ export default function OverlayMiniChat({
   const [input, setInput] = useState("");
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [pending, setPending] = useState(false);
-  const repoRef = useRef<RepoContext | undefined>(undefined);
   const msgsRef = useRef<ChatMsg[]>([]);
   const listRef = useRef<HTMLDivElement | null>(null);
   const speak = useOverlaySpeak(talkBack);
@@ -132,8 +120,6 @@ export default function OverlayMiniChat({
     setMsgs(withUser);
     setPending(true);
     try {
-      await ensureRepoContext(repoRef);
-      const repo = repoRef.current?.ok ? repoRef.current : undefined;
       const screenshotBase64 = getScreenshot() || null;
       if (typeof window.exec.publishVmaxResponse === "function") {
         void window.exec.publishVmaxResponse({ phase: "loading", question: q });
@@ -141,10 +127,11 @@ export default function OverlayMiniChat({
       if (typeof window.exec.setOverlayExpanded === "function") {
         void window.exec.setOverlayExpanded(true);
       }
+      // Repo context intentionally NOT sent — the model was hallucinating
+      // about untracked files when users asked unrelated questions like "hello".
       const res = await window.exec.ask({
         question: q,
         screenshotBase64,
-        repo,
         history: historyForAsk,
       });
       const { prose } = parseAskActionTag(res.text);

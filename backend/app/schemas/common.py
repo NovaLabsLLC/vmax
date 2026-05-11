@@ -1,4 +1,4 @@
-"""Shared schemas: structured LLM response + repo context + history turns.
+"""Shared schemas: structured LLM response + history turns.
 
 These mirror the JS Zod schema in utils/aiResponseSchema.js so the wire
 format is stable across both ends of the IPC boundary.
@@ -25,19 +25,6 @@ class StructuredResponse(BaseModel):
     suggested_commands: list[str] = Field(default_factory=list)
     execution_recommendation: str = "none"
     speakable_summary: str = ""
-
-
-class RepoContext(BaseModel):
-    """Snapshot of the user's repo state passed into plan / ask prompts."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    ok: bool = True
-    name: str | None = None
-    branch: str | None = None
-    changed_files: list[str] = Field(default_factory=list)
-    status: list[str] = Field(default_factory=list)
-    diff_stat: str | None = None
 
 
 class HistoryTurn(BaseModel):

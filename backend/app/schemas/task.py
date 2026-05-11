@@ -25,25 +25,14 @@ RiskLevel = Literal["low", "medium", "high"]
 Agent = Literal["claude_code", "cursor", "codex", "manual"]
 
 
-class VmaxTaskRepoSnapshot(BaseModel):
-    """Repo snapshot the client passes in (output of utils/repoContext.scanRepo).
-
-    Permissive on purpose — older callers may omit fields. Anything we
-    actually need on the server falls back to a safe default.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    ok: bool = True
-    name: str | None = None
-    branch: str | None = None
-    root: str | None = None
-    path: str | None = None
-    changed_files: list[str] = Field(default_factory=list)
-
-
 class VmaxTaskRepo(BaseModel):
-    """The repo block embedded in the assembled VmaxTask."""
+    """The repo block embedded in the assembled VmaxTask.
+
+    The server doesn't receive a repo snapshot anymore — this block is
+    filled with placeholders and the Electron host substitutes its own
+    `lastRepo` from state when it spawns the agent. The block stays on
+    the wire so the Zod schema in utils/taskSchema.js still validates.
+    """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -118,15 +107,14 @@ class VmaxTask(BaseModel):
 class TaskRequest(BaseModel):
     """POST /v1/task body.
 
-    `repo` and `target_branch` come from the Electron host; `prompt` is
-    the user's freeform request.
+    The backend is intentionally repo-agnostic — only the user's prompt
+    is sent. The Electron host fills in the actual repo path from its
+    own state when triggering the agent.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     prompt: str = Field(min_length=1)
-    repo: VmaxTaskRepoSnapshot | None = None
-    target_branch: str | None = None
 
 
 class TaskResponse(BaseModel):

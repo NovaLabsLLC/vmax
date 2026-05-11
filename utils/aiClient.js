@@ -62,18 +62,6 @@ async function requestJson(path, body) {
   return res.json();
 }
 
-function serializeRepo(repo) {
-  if (!repo || typeof repo !== "object") return null;
-  return {
-    ok: repo.ok !== false,
-    name: repo.name ?? null,
-    branch: repo.branch ?? null,
-    changed_files: Array.isArray(repo.changedFiles) ? repo.changedFiles : [],
-    status: Array.isArray(repo.status) ? repo.status : [],
-    diff_stat: repo.diffStat ?? null,
-  };
-}
-
 function normalizeStructured(raw) {
   // The backend always sends a complete StructuredResponse, but be
   // defensive: if a future server returns extra keys or omits one, fall
@@ -193,10 +181,11 @@ function formatAskChatText(d) {
 
 // ---- Public API (matches the previous module exports 1:1) ----
 
-async function planTask({ task, repo, diff, screenshotBase64 }) {
+async function planTask({ task, diff, screenshotBase64 }) {
+  // Repo intentionally not sent — the backend is repo-agnostic, so all
+  // grounding has to live in `task` + `diff` themselves.
   const env = await requestJson("/v1/plan", {
     task: task || "",
-    repo: serializeRepo(repo),
     diff: diff || null,
     screenshot_base64: screenshotBase64 || null,
   });
@@ -208,14 +197,13 @@ async function planTask({ task, repo, diff, screenshotBase64 }) {
 
 async function explainFailure({
   task,
-  repo,
   command,
   output,
   screenshotBase64,
 }) {
+  // Repo intentionally not sent — see planTask above.
   const env = await requestJson("/v1/explain-failure", {
     task: task || "",
-    repo: serializeRepo(repo),
     command: command || "",
     output: output || "",
     screenshot_base64: screenshotBase64 || null,
@@ -256,7 +244,7 @@ async function summarizeDiff({ diff, fallback }) {
   return out;
 }
 
-async function askAssistant({ question, screenshotBase64, repo, history }) {
+async function askAssistant({ question, screenshotBase64, history }) {
   const cleanedHistory = Array.isArray(history)
     ? history
         .filter((m) => m && m.text)
@@ -266,10 +254,10 @@ async function askAssistant({ question, screenshotBase64, repo, history }) {
         }))
     : [];
 
+  // Repo intentionally not sent — the backend is repo-agnostic.
   const env = await requestJson("/v1/ask", {
     question: String(question || ""),
     screenshot_base64: screenshotBase64 || null,
-    repo: serializeRepo(repo),
     history: cleanedHistory,
   });
 

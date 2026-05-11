@@ -607,10 +607,11 @@ export default function WorkspacePanel({
       if (typeof window.exec.setOverlayExpanded === "function") {
         void window.exec.setOverlayExpanded(true);
       }
+      // Repo context intentionally NOT sent — the model was hallucinating
+      // about untracked files when users asked unrelated questions.
       const res = await window.exec.ask({
         question: q,
         screenshotBase64,
-        repo: repo?.ok ? repo : undefined,
         history: messagesRef.current.slice(-6),
       });
       const { prose, action } = parseActionTag(res.text);
