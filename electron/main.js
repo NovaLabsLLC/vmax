@@ -15,7 +15,6 @@
 require("dotenv").config();
 const { app } = require("electron");
 
-const { applySettingsToEnv } = require("./state.js");
 const { getCommandWindow, getOverlayWindow } = require("./windows.js");
 
 // One main process → one floating pill. Each extra `electron` / `npm run
@@ -40,8 +39,6 @@ app.on("second-instance", () => {
     ow.focus();
   }
 });
-
-applySettingsToEnv();
 
 // Wire IPC handlers + lifecycle. Each module registers its own ipcMain
 // channels; order between them doesn't matter except that ipcBus.js must

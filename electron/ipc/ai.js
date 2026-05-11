@@ -1,6 +1,7 @@
 // AI IPC: speech ↔ text, ask, plan, explain failures, summarize diffs, and
-// project scaffolding. All thin wrappers over utils/aiClient.js so the
-// renderer can call into Anthropic/OpenAI without holding API keys.
+// project scaffolding. All thin wrappers over utils/aiClient.js, which is
+// now an HTTP client to the FastAPI service in backend/. Model API keys
+// live on the server, not in this process.
 
 const { ipcMain } = require("electron");
 const {

@@ -33,6 +33,11 @@ async function detectCli(bin, versionArgs = ["--version"]) {
 // Best-effort auth detection. These CLIs don't expose a clean "auth status"
 // command, so we look for credential files they're known to write plus the
 // env-var overrides (which are also valid auth).
+//
+// The env vars come from the user's shell + dotenv-loaded root .env — they
+// are NOT populated from the Vmax Settings UI anymore. Vmax's own AI
+// processing happens on the FastAPI backend with its own keys; these env
+// vars exist only so the user's local Claude / Codex CLIs can pick them up.
 function detectClaudeAuth() {
   if (process.env.ANTHROPIC_API_KEY) return { authed: true, via: "env" };
   const home = os.homedir();

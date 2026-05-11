@@ -1,0 +1,28 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "ignorePaths": [
+    "node_modules/**",
+    "dist/**",
+    ".venv/**",
+    "**/__pycache__/**",
+    ".claude/**",
+    ".cursor/**",
+    "package-lock.json"
+  ],
+  "words": [
+    "applescript",
+    "behaviour",
+    "cutover",
+    "fastapi",
+    "frontmost",
+    "httpx",
+    "openclaw",
+    "osascript",
+    "pycache",
+    "pydantic",
+    "scpt",
+    "uvicorn",
+    "vmax"
+  ]
+}

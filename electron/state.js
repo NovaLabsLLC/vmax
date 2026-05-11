@@ -1,8 +1,13 @@
-// Persisted app state and API-key merging.
+// Persisted app state.
 //
-// We keep one JSON blob in app.getPath("userData") with shape:
+// One JSON blob in app.getPath("userData") with shape:
 //   { profile, settings, onboardedAt, lastRepo, recentRepos }
 // Read/written synchronously — the file is tiny and only touched from main.
+//
+// Note: there is no longer an applySettingsToEnv helper here. AI keys
+// (OPENAI_API_KEY / ANTHROPIC_API_KEY) are owned by the FastAPI backend
+// (see backend/.env). The Electron client doesn't need them anymore for
+// AI calls — utils/aiClient.js is just an HTTP client now.
 
 const path = require("path");
 const fs = require("fs");
@@ -28,16 +33,4 @@ function writeState(s) {
   }
 }
 
-// API keys: prefer the user's saved settings, fall back to .env. We mutate
-// process.env so utils/aiClient.js (which reads keys lazily) sees the merged
-// values. Saved settings explicitly override .env, mirroring the original.
-function applySettingsToEnv() {
-  const s = readState();
-  const sett = s.settings || {};
-  if (sett.openaiApiKey && !process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = sett.openaiApiKey;
-  if (sett.anthropicApiKey && !process.env.ANTHROPIC_API_KEY) process.env.ANTHROPIC_API_KEY = sett.anthropicApiKey;
-  if (sett.openaiApiKey) process.env.OPENAI_API_KEY = sett.openaiApiKey;
-  if (sett.anthropicApiKey) process.env.ANTHROPIC_API_KEY = sett.anthropicApiKey;
-}
-
-module.exports = { statePath, readState, writeState, applySettingsToEnv };
+module.exports = { statePath, readState, writeState };

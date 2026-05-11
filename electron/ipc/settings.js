@@ -1,11 +1,12 @@
 // IPC: user profile, app settings, Linear API verify, onboarding flag.
 //
-// Saved settings are merged with .env at boot (state.applySettingsToEnv) so
-// utils/aiClient.js sees the right keys. We never echo .env keys back through
-// `exec:get-settings` — only what the user explicitly saved.
+// We never echo .env keys back through `exec:get-settings` — only what
+// the user explicitly saved. The OPENAI / ANTHROPIC keys saved here are
+// inert for Vmax AI itself (the FastAPI backend owns those keys); they
+// stay in the schema only so the existing settings UI keeps working.
 
 const { ipcMain } = require("electron");
-const { readState, writeState, applySettingsToEnv } = require("../state.js");
+const { readState, writeState } = require("../state.js");
 const { getCommandWindow, getOverlayWindow, createOverlayWindow } = require("../windows.js");
 const { verifyLinearApiKey } = require("../../utils/linearApi.js");
 
@@ -47,7 +48,6 @@ function register() {
     const s = readState();
     s.settings = { ...(s.settings || {}), ...settings };
     writeState(s);
-    applySettingsToEnv();
     const merged = s.settings || {};
     for (const w of [getCommandWindow(), getOverlayWindow()]) {
       if (w && !w.isDestroyed()) {
