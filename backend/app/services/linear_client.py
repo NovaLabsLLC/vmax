@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 
 from ..config import settings
+from . import linear_workspaces
 
 LINEAR_API_URL = "https://api.linear.app/graphql"
 REQUEST_TIMEOUT_S = 20.0
@@ -37,8 +38,16 @@ _MY_ISSUES_PHRASES: tuple[str, ...] = (
     "my issues",
     "my open issues",
     "my assigned",
+    "my assignments",
     "my plate",
     "my queue",
+    "linear task",
+    "linear tasks",
+    "linear ticket",
+    "linear tickets",
+    "linear issue",
+    "linear issues",
+    "linear backlog",
     "what should i work on",
     "what should i do next",
     "what should i tackle",
@@ -73,7 +82,35 @@ _WORK_NOUNS: tuple[str, ...] = (
     "linear",
     "work",
     "queue",
+    "assignment",
+    "assignments",
+    "backlog",
+    "board",
+    "stuff",
+    "things",
 )
+
+# Loose STT-ish matches (Whisper typo clusters around "tasks")
+_LOOSE_TASK_CHUNK = re.compile(r"\bt+a+s*k+\w*", re.I)
+
+
+def _looks_like_linear_backlog_question(t: str) -> bool:
+    """Voice / slang: wants assigned Linear workload, not arbitrary Q&A."""
+
+    low = t.lower()
+
+    workload_token = (
+        any(noun in low for noun in ("task", "tasks", "tix"))
+        or bool(_LOOSE_TASK_CHUNK.search(low))
+        or any(pk in low for pk in ("issues", "ticket", "tickets"))
+        or any(pk in low for pk in ("assignment", "assignments"))
+        or any(pk in low for pk in ("backlog", "board", "sprint"))
+    )
+
+    if "linear" in low and workload_token:
+        return True
+
+    return False
 
 
 def is_my_issues_question(text: str | None) -> bool:
@@ -93,6 +130,9 @@ def is_my_issues_question(text: str | None) -> bool:
     for verb in _MY_ISSUES_VERB_PREFIXES:
         if verb in t and any(noun in t for noun in _WORK_NOUNS):
             return True
+
+    if _looks_like_linear_backlog_question(t):
+        return True
 
     return False
 
@@ -168,7 +208,9 @@ _ISSUE_FIELDS = """
   project { id name state }
   cycle { id name startsAt endsAt }
   labels { nodes { id name } }
-  comments { nodes { id body createdAt user { name email } } }
+  comments(first: 15) {
+    nodes { id body createdAt user { name email } }
+  }
 """
 
 
@@ -182,28 +224,9 @@ _MY_ISSUES_QUERY = (
 )
 
 
-async def get_linear_issue(issue_id: str) -> dict[str, Any] | None:
-    data = await linear_graphql(_GET_ISSUE_QUERY, {"id": issue_id})
-    return data.get("issue")
-
-
-async def get_my_linear_issues(limit: int = 25) -> list[dict[str, Any]]:
-    """Return the viewer's assigned issues that are still open
-    (not completed, not canceled)."""
-    data = await linear_graphql(_MY_ISSUES_QUERY, {"first": limit})
-    viewer = data.get("viewer") or {}
-    assigned = (viewer.get("assignedIssues") or {}).get("nodes") or []
-    return [
-        issue
-        for issue in assigned
-        if (issue.get("state") or {}).get("type") not in ("completed", "canceled")
-    ]
-
-
 # ---------------------------------------------------------------------------
-# Explicit-key variants — used by the multi-workspace store. The non-suffixed
-# functions above are kept for the legacy single-env-key path so we don't
-# break the existing `/v1/ask` issue-lookup short-circuit.
+# Explicit-key helpers + workspace fan-out (`linear_workspaces` store /
+# synthetic legacy env token).
 # ---------------------------------------------------------------------------
 
 
@@ -290,6 +313,60 @@ async def get_my_open_issues_with_key(
     ]
 
 
+async def aggregate_open_assigned_issues(
+    limit_per_workspace: int = 25,
+) -> list[dict[str, Any]]:
+    """All open assigned issues across every persisted/synthetic workspace,
+    merged and globally priority-sorted. Each row carries ``_workspace_name``
+    so the formatter can annotate multi-org setups."""
+
+    workspaces = linear_workspaces.effective_workspaces()
+    if not workspaces:
+        return []
+
+    merged: list[dict[str, Any]] = []
+
+    for ws in workspaces:
+        api_key = (ws.key or "").strip()
+        if not api_key:
+            continue
+        ws_label = (ws.label or ws.workspace_name or "").strip()
+
+        try:
+            chunk = await get_my_open_issues_with_key(api_key, limit_per_workspace)
+        except LinearClientError:
+            continue
+        tag = ws_label if ws_label else "Linear"
+        for issue in chunk:
+            merged.append({**issue, "_workspace_name": tag})
+
+    return sort_my_issues(merged)
+
+
+async def get_linear_issue(issue_id: str) -> dict[str, Any] | None:
+    """Try each configured workspace token until Linear returns ``issue``.
+    Mirrors how the Settings UI persists keys independently of ``.env``."""
+    for ws in linear_workspaces.effective_workspaces():
+        api_key = (ws.key or "").strip()
+        if not api_key:
+            continue
+        try:
+            data = await linear_graphql_with_key(
+                api_key, _GET_ISSUE_QUERY, {"id": issue_id},
+            )
+        except LinearClientError:
+            continue
+        hit = data.get("issue")
+        if hit:
+            return hit
+    return None
+
+
+async def get_my_linear_issues(limit: int = 25) -> list[dict[str, Any]]:
+    """Backward-compatible name — fans out via ``aggregate_open_assigned``."""
+    return await aggregate_open_assigned_issues(limit)
+
+
 def format_linear_issue_summary(issue_id: str, issue: dict[str, Any]) -> str:
     """Render an issue dict into the multiline ``summary`` field shown in
     the Vmax structured response."""
@@ -362,6 +439,45 @@ def sort_my_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(issues, key=_priority_sort_key)
 
 
+def _truncate_block(text: str, max_chars: int) -> str:
+    stripped = (text or "").strip()
+    if len(stripped) <= max_chars:
+        return stripped
+    return stripped[: max_chars - 1].rstrip() + "\u2026"
+
+
+def _recent_comment_preview_lines(
+    issue: dict[str, Any],
+    *,
+    max_comments: int = 3,
+    body_max_chars: int = 200,
+) -> list[str]:
+    nodes = ((issue.get("comments") or {}).get("nodes") or [])[:]
+    if not nodes:
+        return []
+
+    def _ts(c: dict[str, Any]) -> str:
+        return str(c.get("createdAt") or "")
+
+    nodes.sort(key=_ts, reverse=True)
+    out: list[str] = []
+    for c in nodes[:max_comments]:
+        body_raw = (c.get("body") or "").strip()
+        author = (
+            ((c.get("user") or {}).get("name") or "").strip() or "(unknown)"
+        )
+        body = _truncate_block(body_raw, body_max_chars).replace("\n", " ")
+        out.append(f"   · {author}: {body}")
+
+    tail = len(nodes) - max_comments if len(nodes) > max_comments else 0
+    if tail > 0:
+        out.append(f"   · …and {tail} older comment(s) not shown")
+    return out
+
+
+MY_ISSUES_DESC_MAX_CHARS = 700
+
+
 def format_my_issues_summary(issues: list[dict[str, Any]]) -> str:
     if not issues:
         return "You have no open issues assigned to you in Linear."
@@ -380,12 +496,66 @@ def format_my_issues_summary(issues: list[dict[str, Any]]) -> str:
         priority_label = _PRIORITY_LABEL.get(priority_num, "Unknown")
 
         project = (issue.get("project") or {}).get("name")
-        bits = [f"{idx}. {identifier} — {title}", f"   {state} · {priority_label}"]
+        ws_hint = issue.get("_workspace_name")
+        line_one = (
+            f"{idx}. [{ws_hint}] {identifier} — {title}"
+            if ws_hint
+            else f"{idx}. {identifier} — {title}"
+        )
+        bits = [line_one, f"   {state} · {priority_label}"]
         if project:
             bits[-1] += f" · {project}"
         url = issue.get("url")
         if url:
             bits.append(f"   {url}")
+
+        team = issue.get("team") or {}
+        team_label = (
+            ((team.get("key") or team.get("name") or "").strip()) or ""
+        )
+        if team_label:
+            bits.append(f"   Team: {team_label}")
+
+        estimate = issue.get("estimate")
+        if estimate is not None:
+            bits.append(f"   Estimate pts: {estimate}")
+
+        due = (issue.get("dueDate") or "").strip()
+        if due:
+            bits.append(f"   Due: {due}")
+
+        branch = (issue.get("branchName") or "").strip()
+        if branch:
+            bits.append(f"   Branch: {branch}")
+
+        cycle = issue.get("cycle") or {}
+        cycle_name = (cycle.get("name") or "").strip()
+        if cycle_name:
+            bits.append(f"   Cycle: {cycle_name}")
+
+        labels = [
+            label.get("name")
+            for label in ((issue.get("labels") or {}).get("nodes") or [])
+            if label.get("name")
+        ]
+        if labels:
+            bits.append(f"   Labels: {', '.join(labels)}")
+
+        creator = (
+            ((issue.get("creator") or {}).get("name") or "").strip() or ""
+        )
+        if creator:
+            bits.append(f"   Created by: {creator}")
+
+        desc = issue.get("description")
+        desc_s = ((desc or "").strip()) or "(no description)"
+        bits.append(f"   Description: {_truncate_block(desc_s, MY_ISSUES_DESC_MAX_CHARS)}")
+
+        comment_lines = _recent_comment_preview_lines(issue)
+        if comment_lines:
+            bits.append("   Recent comments:")
+            bits.extend(comment_lines)
+
         lines.extend(bits)
         lines.append("")
 

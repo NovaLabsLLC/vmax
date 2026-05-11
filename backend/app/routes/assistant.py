@@ -21,19 +21,19 @@ from ..schemas.requests import (
     PlanRequest,
     SummarizeDiffRequest,
 )
-from ..config import settings
 from ..logging_setup import log_audit
 from ..schemas.responses import StructuredEnvelope
+from ..services import linear_workspaces
 from ..services import llm_router
 from ..services.linear_client import (
     LinearClientError,
+    aggregate_open_assigned_issues,
     extract_linear_issue_id,
     format_linear_issue_summary,
     format_linear_speakable,
     format_my_issues_speakable,
     format_my_issues_summary,
     get_linear_issue,
-    get_my_linear_issues,
     is_my_issues_question,
 )
 from ..services.meta_capability import (
@@ -119,7 +119,7 @@ async def _linear_my_issues_envelope() -> StructuredEnvelope | None:
     take over; returns a real envelope (even for an empty queue) when
     Linear responded."""
     try:
-        issues = await get_my_linear_issues(limit=MY_ISSUES_FETCH_LIMIT)
+        issues = await aggregate_open_assigned_issues(MY_ISSUES_FETCH_LIMIT)
     except LinearClientError as err:
         log_audit(
             "ask_linear_shortcut",
@@ -159,7 +159,7 @@ async def _try_linear_shortcut(question: str) -> StructuredEnvelope | None:
     Returns None to mean "fall through to the LLM path" — used when no
     Linear key is configured, no trigger matched, or Linear itself
     errored."""
-    if not settings.has_linear:
+    if not linear_workspaces.effective_workspaces():
         return None
 
     issue_id = extract_linear_issue_id(question)
