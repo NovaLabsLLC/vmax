@@ -10,14 +10,16 @@ export type Bubble = {
 export default function TalkBack({ bubbles }: { bubbles: Bubble[] }) {
   if (bubbles.length === 0) return null;
   return (
-    <div className="space-y-1">
+    <div className="flex flex-col gap-3">
       {bubbles.slice(-4).map((b) => (
         <div
           key={b.id}
-          className={`text-[12px] leading-relaxed rounded-lg px-3 py-1.5 inline-block
-            ${b.tone === "warn" ? "bg-amber-500/10 text-amber-200/95 border border-amber-400/20"
-              : b.tone === "success" ? "bg-emerald-500/10 text-emerald-200/95 border border-emerald-400/20"
-              : "bg-white/[0.04] text-white/80 border border-white/[0.06]"}`}
+          className={`text-[11px] leading-snug pl-3 border-l border-white/[0.08]
+            ${b.tone === "warn"
+              ? "text-amber-200/65 border-l-amber-400/25"
+              : b.tone === "success"
+                ? "text-emerald-200/60 border-l-emerald-400/28"
+                : "text-white/48 border-l-white/[0.12]"}`}
         >
           {b.text}
         </div>

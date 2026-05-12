@@ -5,7 +5,11 @@ Two surfaces live here:
 1. **Issue lookups and patch** — ``GET /issues/{issue_id}`` plus
    ``PATCH /issues/{issue_id}`` (title, description, priority, workflow state).
 
-2. **Workspace CRUD** for the Settings UI — the renderer manages the
+2. **Create + team pick** — ``POST /issues`` creates an ``issueCreate`` row;
+   ``GET /teams`` lists team ids/keys scoped to one connected workspace when
+   the UI builds the picker.
+
+3. **Workspace CRUD** for the Settings UI — the renderer manages the
    list of connected Linear workspaces by hitting these endpoints. Each
    workspace stores its own personal API key on the backend (see
    ``app.services.linear_workspaces``). The raw key never leaves the
@@ -31,11 +35,13 @@ from ..logging_setup import log_audit
 from ..services import linear_workspaces
 from ..services.linear_client import (
     LinearClientError,
+    create_linear_issue_with_key,
     get_all_my_open_issues_with_key,
     get_linear_issue,
     get_my_linear_issues,
     get_my_open_issues_with_key,
     linear_update_issue,
+    list_teams_for_key,
     sort_my_issues,
     verify_linear_key,
 )
@@ -64,6 +70,103 @@ def _require_linear() -> None:
                 "LINEAR_API_KEY in backend/.env and restart."
             ),
         )
+
+
+def _workspace_for_request(workspace_id: str | None) -> linear_workspaces.LinearWorkspace:
+    """Pick the saved Linear workspace key for a mutation when the user has
+    one or many orgs connected."""
+    wss = linear_workspaces.effective_workspaces()
+    if not wss:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No Linear workspaces connected. Add one in Settings, or set "
+                "LINEAR_API_KEY in backend/.env and restart."
+            ),
+        )
+    if len(wss) == 1:
+        return wss[0]
+    wid = (workspace_id or "").strip()
+    if not wid:
+        raise HTTPException(
+            status_code=400,
+            detail="workspace_id is required when multiple Linear workspaces are connected.",
+        )
+    ws = linear_workspaces.find(wid)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Linear workspace not found.")
+    return ws
+
+
+@router.get("/teams")
+async def list_teams(workspace_id: str | None = Query(default=None)) -> dict[str, Any]:
+    """Teams in the scoped workspace (needed to pick ``team_id`` when creating issues)."""
+
+    _require_linear()
+    ws = _workspace_for_request(workspace_id)
+    api_key = (ws.key or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=502, detail="Linear API key is empty for this workspace.")
+    try:
+        teams = await list_teams_for_key(api_key)
+    except LinearClientError as err:
+        log_audit("linear_teams_list", workspace_id=ws.id, ok=False, error=str(err))
+        raise HTTPException(status_code=502, detail=str(err))
+    log_audit("linear_teams_list", workspace_id=ws.id, ok=True, count=len(teams))
+    return {"teams": teams, "workspace_id": ws.id}
+
+
+class LinearIssueCreateBody(BaseModel):
+    title: str = Field(..., min_length=1, max_length=512)
+    team_id: str = Field(
+        ...,
+        min_length=1,
+        description="Linear team UUID or short key (EXE, INT, …).",
+    )
+    description: str | None = Field(default=None, max_length=50_000)
+    workspace_id: str | None = Field(
+        default=None,
+        description="Saved workspace row id (`lw_*`) — required when several orgs exist.",
+    )
+    priority: int | None = Field(default=None, ge=0, le=4)
+    assign_to_me: bool = Field(
+        default=True,
+        description="Sets assigneeId to the API key viewer when true.",
+    )
+
+
+@router.post("/issues")
+async def create_issue(body: LinearIssueCreateBody = Body(...)) -> dict[str, Any]:
+    """Create a Linear issue via ``issueCreate`` (scoped to one connected workspace)."""
+
+    _require_linear()
+    ws = _workspace_for_request(body.workspace_id)
+    api_key = (ws.key or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=502, detail="Linear API key is empty for this workspace.")
+    try:
+        issue = await create_linear_issue_with_key(
+            api_key,
+            team_id=body.team_id.strip(),
+            title=body.title.strip(),
+            description=body.description,
+            priority=body.priority,
+            assignee_self=body.assign_to_me,
+        )
+    except LinearClientError as err:
+        log_audit("linear_issue_create", ok=False, error=str(err))
+        raise HTTPException(status_code=502, detail=str(err))
+
+    ident = issue.get("identifier") or ""
+    title = issue.get("title") or ""
+    log_audit(
+        "linear_issue_create",
+        ok=True,
+        workspace_id=ws.id,
+        issue_id=ident,
+        title=str(title)[:120],
+    )
+    return {"issue": issue, "workspace_id": ws.id}
 
 
 @router.get("/issues/{issue_id}")

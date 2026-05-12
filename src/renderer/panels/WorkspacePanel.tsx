@@ -2,21 +2,22 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import RepoStrip from "../components/RepoStrip";
 import ActivityBar, { Activity } from "../components/ActivityBar";
 import MessageThread, { Msg } from "../components/MessageThread";
-import TaskPanel from "../components/TaskPanel";
-import AskFolderContextBar from "../components/AskFolderContextBar";
 import LinearIssuesStrip from "../components/LinearIssuesStrip";
 import CommandCards from "../components/CommandCards";
 import ResultPanel from "../components/ResultPanel";
 import Terminal from "../components/Terminal";
-import TalkBack, { Bubble } from "../components/TalkBack";
-import type { RepoContext, Plan, FailureExplanation, DiffSummary, VmaxPanelAction, ExecAgent } from "../types";
+import LiveAgentsPanel from "../components/LiveAgentsPanel";
+import type { RepoContext, Plan, FailureExplanation, DiffSummary, VmaxPanelAction } from "../types";
 import { buildOpenClawAgentMessage, buildOpenClawFromAskPanel } from "../utils/openClawPrompt";
 import { buildOpenClawSpeakable, deriveSpeakable, proseToSpeakable, toSpeakableLine } from "../utils/talkBackText";
 import { subscribeSettingsUpdated } from "../utils/subscribeSettingsUpdated";
 import { formatRepoContextSummary } from "../utils/repoContextSummary";
+import { extractLinearIssueId } from "../utils/extractLinearIssueId";
+import { moveLinearIssueToInReview } from "../utils/linearIssuePatch";
 
 type ResultKind = "idle" | "plan" | "failure" | "diff";
 type TermLine = { stream: "stdout" | "stderr" | "meta"; text: string };
+type WorkspaceSayTone = "info" | "warn" | "success";
 
 type Props = {
   pendingVoiceQuestion?: { text: string; epoch: number } | null;
@@ -68,6 +69,11 @@ export default function WorkspacePanel({
   const [exitCode, setExitCode] = useState<number | null>(null);
   const lastRunOutputRef = useRef<string>("");
 
+  const appendWorkspaceTerminal = useCallback((text: string, stream: "stdout" | "stderr") => {
+    const line = text.endsWith("\n") ? text : `${text}\n`;
+    setLines((prev) => [...prev, { stream, text: line }]);
+  }, []);
+
   // live activity (drives the activity bar + pill busy state)
   const [activity, setActivity] = useState<Activity | null>(null);
   const [lastResultStatus, setLastResultStatus] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
@@ -90,19 +96,20 @@ export default function WorkspacePanel({
   // chat thread (general Ask) — independent of repo
   const [messages, setMessages] = useState<Msg[]>([]);
   const [askPending, setAskPending] = useState(false);
-  /** Bumps TaskPanel to start listening after assistant asks for confirmation. */
-  const [micArmToken, setMicArmToken] = useState(0);
-  const [structuredAgents, setStructuredAgents] = useState<Record<ExecAgent, boolean>>({
-    claude: true,
-    codex: false,
-    cursor: false,
-  });
-  const [structuredTaskBusy, setStructuredTaskBusy] = useState(false);
-  /** Explicit folder for Ask (overrides workspace `repoContextSummary` while set). */
-  const [askAttachPath, setAskAttachPath] = useState<string | null>(null);
-  const [askAttachName, setAskAttachName] = useState<string | null>(null);
-  const [askAttachSummary, setAskAttachSummary] = useState("");
-  const [askAttachBusy, setAskAttachBusy] = useState(false);
+  const [linearIssueFromStrip, setLinearIssueFromStrip] = useState<string | null>(null);
+  const resolvedLinearIssueId = useMemo(
+    () => linearIssueFromStrip || extractLinearIssueId(task),
+    [linearIssueFromStrip, task],
+  );
+  const resolvedLinearRef = useRef<string | null>(null);
+  useEffect(() => {
+    resolvedLinearRef.current = resolvedLinearIssueId;
+  }, [resolvedLinearIssueId]);
+  /** Handoff pasted / structured Cursor run finished — prompts user to archive Linear after real work in Cursor. */
+  const [afterCursorHandoff, setAfterCursorHandoff] = useState(false);
+  /** After My Tasks "Done", offer one-step undo (restore In Review column). Cleared when issue link changes. */
+  const [linearUndoAfterDoneId, setLinearUndoAfterDoneId] = useState<string | null>(null);
+  const [linearUndoBusy, setLinearUndoBusy] = useState(false);
   const messagesRef = useRef<Msg[]>([]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
@@ -128,10 +135,52 @@ export default function WorkspacePanel({
     });
   }, []);
 
-  // bubbles
-  const [bubbles, setBubbles] = useState<Bubble[]>([]);
-  const say = useCallback((text: string, tone: Bubble["tone"] = "info") => {
-    setBubbles((prev) => [...prev, { id: Math.random().toString(36).slice(2), text, tone, ts: Date.now() }]);
+  // Status copy from `say` goes to the Workspace terminal (stdout / stderr), not a separate bubble rail.
+  const say = useCallback(
+    (text: string, tone: WorkspaceSayTone = "info") => {
+      appendWorkspaceTerminal(text, tone === "warn" ? "stderr" : "stdout");
+    },
+    [appendWorkspaceTerminal],
+  );
+
+  const undoLinearMarkedDone = useCallback(async () => {
+    const cur = resolvedLinearIssueId?.trim().toUpperCase() || "";
+    const undoKey = linearUndoAfterDoneId?.trim().toUpperCase() || "";
+    if (!cur || cur !== undoKey) return;
+    setLinearUndoBusy(true);
+    try {
+      await moveLinearIssueToInReview(resolvedLinearIssueId!.trim());
+      setLinearUndoAfterDoneId(null);
+      say(`Moved ${resolvedLinearIssueId} back to In Review in Linear.`, "success");
+    } catch (e) {
+      say(`Could not undo Linear: ${String((e as Error)?.message || e)}`, "warn");
+    } finally {
+      setLinearUndoBusy(false);
+    }
+  }, [resolvedLinearIssueId, linearUndoAfterDoneId, say]);
+
+  /** Drop undo chip if viewer links a different Linear id. */
+  useEffect(() => {
+    const cur = resolvedLinearIssueId?.trim().toUpperCase() || "";
+    setLinearUndoAfterDoneId((prev) => {
+      if (!prev) return null;
+      return prev.trim().toUpperCase() === cur ? prev : null;
+    });
+  }, [resolvedLinearIssueId]);
+
+  useEffect(() => {
+    if (!resolvedLinearIssueId) setAfterCursorHandoff(false);
+  }, [resolvedLinearIssueId]);
+
+  useEffect(() => {
+    if (typeof window.exec?.onTaskStatus !== "function") return undefined;
+    const off = window.exec.onTaskStatus((rec) => {
+      if (rec.selectedAgent !== "cursor") return;
+      if (rec.status !== "completed") return;
+      if (!resolvedLinearRef.current) return;
+      setAfterCursorHandoff(true);
+    });
+    return () => off();
   }, []);
 
   const runIdRef = useRef<string | null>(null);
@@ -148,7 +197,7 @@ export default function WorkspacePanel({
     loopRef.current = next;
     setLoopUI(next);
   }
-  function endLoop(reason: string, tone: Bubble["tone"] = "info") {
+  function endLoop(reason: string, tone: WorkspaceSayTone = "info") {
     if (!loopRef.current.active) return;
     setLoop({ ...loopRef.current, active: false });
     say(`Auto-loop ended: ${reason}.`, tone);
@@ -357,12 +406,35 @@ export default function WorkspacePanel({
 
   // ---- session load + autosave ----
   // When activeSessionId changes (or on first mount), load that chat's
-  // task / plan / failure / diff / bubbles into the workspace. If no session
+  // task / plan / failure / diff / messages into the workspace. If no session
   // is active, fall back to the last-used repo (legacy behavior).
   const loadedSessionRef = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const hadLoaded = loadedSessionRef.current;
+
+      /** Selection cleared from the chat sidebar — reset transcript/plan/task state (keep repo if any). */
+      if (!activeSessionId && hadLoaded) {
+        loadedSessionRef.current = null;
+        lastTitleRef.current = "";
+        pendingActionRef.current = null;
+        setTask("");
+        setPlan(null);
+        setFailure(null);
+        setDiffSummary(null);
+        setMessages([]);
+        setResultKind("idle");
+        setLines([]);
+        setRunId(null);
+        runIdRef.current = null;
+        setRunCommand(null);
+        setExitCode(null);
+        lastRunOutputRef.current = "";
+        setLoop({ active: false, iter: 0, max: 3, verify: null });
+        return;
+      }
+
       if (activeSessionId && activeSessionId !== loadedSessionRef.current) {
         const s = await window.exec.getSession(activeSessionId);
         if (cancelled || !s) return;
@@ -371,7 +443,6 @@ export default function WorkspacePanel({
         setPlan(s.plan || null);
         setFailure(s.failure || null);
         setDiffSummary(s.diffSummary || null);
-        setBubbles(Array.isArray(s.bubbles) ? s.bubbles : []);
         setMessages(Array.isArray(s.messages) ? s.messages : []);
         setResultKind(s.plan ? "plan" : s.failure ? "failure" : s.diffSummary ? "diff" : "idle");
         if (s.repoPath) {
@@ -409,7 +480,7 @@ export default function WorkspacePanel({
         const titleSource = task.trim() || firstUserMsg.trim();
         const titleFromTask = (titleSource.split(/\n/)[0] || "").slice(0, 80) || "New chat";
         if (!id) {
-          const hasContent = task.trim() || plan || failure || diffSummary || bubbles.length || messages.length;
+          const hasContent = task.trim() || plan || failure || diffSummary || messages.length;
           if (!hasContent) return;
           const seed = await window.exec.newSession({
             title: titleFromTask,
@@ -432,7 +503,7 @@ export default function WorkspacePanel({
           plan,
           failure,
           diffSummary,
-          bubbles: bubbles.slice(-60),
+          bubbles: [],
           messages: messages.slice(-100),
           repoPath: repoPath || null,
           repoName: repo?.ok ? repo.name : null,
@@ -448,7 +519,7 @@ export default function WorkspacePanel({
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task, plan, failure, diffSummary, bubbles, messages, active, repoPath]);
+  }, [task, plan, failure, diffSummary, messages, active, repoPath, activeSessionId]);
 
   // ---- pill bus ----
   const taskRef = useRef(task);
@@ -579,34 +650,6 @@ export default function WorkspacePanel({
     return s;
   }
 
-  /** Native folder picker + scan for bounded `repoContextSummary` on Ask only. */
-  async function pickAskContextFolder() {
-    setAskAttachBusy(true);
-    try {
-      const p = await window.exec.pickRepo();
-      if (!p) return;
-      const ctx = await window.exec.scanRepo(p);
-      if (!ctx.ok) {
-        say(`${ctx.error} — choose a folder that contains a git repository.`, "warn");
-        return;
-      }
-      setAskAttachPath(p);
-      setAskAttachName(ctx.name);
-      setAskAttachSummary(formatRepoContextSummary(ctx));
-      say(`Ask will use git context from ${ctx.name}.`, "success");
-    } catch (err) {
-      say(`Could not attach folder: ${(err as Error).message}`, "warn");
-    } finally {
-      setAskAttachBusy(false);
-    }
-  }
-
-  function clearAskContextFolder() {
-    setAskAttachPath(null);
-    setAskAttachName(null);
-    setAskAttachSummary("");
-  }
-
   // ---- general Ask (screen-aware, repo-optional) ----
   async function runAsk(question: string) {
     const q = (question || "").trim();
@@ -650,9 +693,7 @@ export default function WorkspacePanel({
       if (typeof window.exec.setOverlayExpanded === "function") {
         void window.exec.setOverlayExpanded(true);
       }
-      const askSummary =
-        (askAttachSummary && askAttachSummary.trim()) ||
-        (repo?.ok && repoContextSummary ? repoContextSummary : "");
+      const askSummary = repo?.ok && repoContextSummary ? repoContextSummary : "";
       const res = await window.exec.ask({
         question: q,
         screenshotBase64,
@@ -686,7 +727,6 @@ export default function WorkspacePanel({
           }
         } else {
           pendingActionRef.current = action;
-          setMicArmToken((t) => t + 1);
         }
       }
     } catch (err) {
@@ -876,68 +916,6 @@ export default function WorkspacePanel({
     } finally { setResultLoading(false); }
   }
 
-  async function runStructuredShip() {
-    const t = (taskRef.current ?? task).trim();
-    if (!repo?.ok || !repoPath) {
-      say("Start Vmax on a repo first so we can attach paths and git context.", "warn");
-      return;
-    }
-    if (!t) {
-      say("Describe the task in the box above first.", "warn");
-      return;
-    }
-    const agents: ExecAgent[] = [];
-    if (structuredAgents.claude) agents.push("claude");
-    if (structuredAgents.codex) agents.push("codex");
-    if (structuredAgents.cursor) agents.push("cursor");
-    if (!agents.length) {
-      say("Pick at least one agent — Claude Code, Codex, or Cursor.", "warn");
-      return;
-    }
-    setStructuredTaskBusy(true);
-    beginActivity("plan", "Structured task…");
-    try {
-      bumpActivityLabel("Creating task schema…");
-      const summary = repoContextSummary;
-      const created = await window.exec.taskCreate({ prompt: t, repoContextSummary: summary });
-      if (!created.ok) {
-        say(created.error || "Could not create a structured task.", "warn");
-        endActivity({ tone: "err", text: "Task create failed" });
-        return;
-      }
-      if (!created.task) {
-        say("Structured task payload was incomplete — try again.", "warn");
-        endActivity({ tone: "err", text: "Task create failed" });
-        return;
-      }
-      bumpActivityLabel(`Dispatching to ${agents.length} agent${agents.length === 1 ? "" : "s"}…`);
-      const trig = await window.exec.taskTrigger({
-        task: created.task,
-        agents,
-        repoPath,
-        repoSummary: summary || undefined,
-      });
-      if (trig.ok) {
-        say(
-          agents.length > 1
-            ? `Structured task dispatched to ${agents.join(", ")} — check overlays for status.`
-            : `Structured task dispatched to ${agents[0]}.`,
-          "success",
-        );
-        endActivity({ tone: "ok", text: "Agents started" });
-      } else {
-        say(trig.error || "Could not dispatch to agents.", "warn");
-        endActivity({ tone: "err", text: "Dispatch failed" });
-      }
-    } catch (err) {
-      const msg = `Structured task failed: ${(err as Error).message}`;
-      say(msg, "warn");
-      endActivity({ tone: "err", text: "Structured task failed" });
-    } finally {
-      setStructuredTaskBusy(false);
-    }
-  }
-
   // ---- terminal ----
   function newRunId() { return "r-" + Math.random().toString(36).slice(2, 10); }
   function startCommand(command: string) {
@@ -996,8 +974,13 @@ export default function WorkspacePanel({
   function cancelRun() { if (runId) window.exec.cancelRun(runId); }
   function clearTerminal() { setLines([]); setExitCode(null); setRunCommand(null); }
 
-  // cards
-  const cards = useMemo(() => [
+  /** Hide Plan Task / Typecheck / Lint / Tests / Summarize Diff — set true to restore. */
+  const SHOW_WORKSPACE_COMMAND_CARDS = false;
+
+  // cards (see SHOW_WORKSPACE_COMMAND_CARDS above)
+  const cards = useMemo(() => {
+    if (!SHOW_WORKSPACE_COMMAND_CARDS) return [];
+    return [
     { key: "plan", title: "Plan Task", hint: "Tactical plan + Cursor prompt",
       enabled: active && repo?.ok === true && !resultLoading,
       loading: resultLoading && resultKind === "plan", onClick: runPlan },
@@ -1016,8 +999,10 @@ export default function WorkspacePanel({
     { key: "diff", title: "Summarize Diff", hint: "git diff → summary",
       enabled: active && repo?.ok === true && !resultLoading,
       loading: resultLoading && resultKind === "diff", onClick: runSummarizeDiff },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [active, repo, resultLoading, resultKind, runId, runCommand]);
+    ];
+    // Stable handlers omitted: runPlan, runSummarizeDiff, startCommand
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- card grid toggled by SHOW_WORKSPACE_COMMAND_CARDS
+  }, [SHOW_WORKSPACE_COMMAND_CARDS, active, repo?.ok, resultLoading, resultKind, runId, runCommand]);
 
   // handoff
   async function copyCursorPrompt(prompt: string) {
@@ -1084,6 +1069,13 @@ export default function WorkspacePanel({
     say("Opening Cursor and sending prompt…");
     const r = await window.exec.sendToCursorChat({ repoPath, prompt });
     const line = describeCursorHandoff(r);
+    const linked =
+      linearIssueFromStrip ||
+      extractLinearIssueId(prompt) ||
+      null;
+    if (linked && r.ok && !r.automationFailed) {
+      setAfterCursorHandoff(true);
+    }
     if (r.ok) {
       endActivity({ tone: "ok", text: "Sent to Cursor" });
       say(line, r.automationFailed ? "warn" : "success");
@@ -1184,20 +1176,20 @@ export default function WorkspacePanel({
                 });
                 // clear local state for the new chat
                 setTask(""); setPlan(null); setFailure(null); setDiffSummary(null);
-                setBubbles([]); setMessages([]); setResultKind("idle"); setLines([]);
+                setMessages([]); setResultKind("idle"); setLines([]);
                 lastTitleRef.current = "";
                 loadedSessionRef.current = s.id;
                 onSessionChange?.(s.id);
               }}
-              className="h-9 px-3 rounded-lg text-[12px] text-white/85 hover:text-white
-                         bg-white/[0.06] hover:bg-white/[0.10] border border-white/[0.10]"
+              className="h-9 px-3 rounded-lg text-[12px] font-medium bg-white text-black border border-white
+                         hover:bg-white/90 hover:border-white/95 shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
             >
               + New chat
             </button>
             <button
               onClick={changeRepo}
-              className="h-9 px-3 rounded-lg text-[12px] text-white/75 hover:text-white
-                         bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08]"
+              className="h-9 px-3 rounded-lg text-[12px] font-medium bg-black text-white border border-white/90
+                         hover:bg-white/[0.06] hover:text-white hover:border-white"
             >
               Select Repo
             </button>
@@ -1214,47 +1206,64 @@ export default function WorkspacePanel({
 
       <ActivityBar activity={activity} resultFlash={lastResultStatus} />
 
-      <LinearIssuesStrip say={say} onFillTask={setTask} />
-
-      {active && (
-        <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-3 space-y-2">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-            <span className="text-[10.5px] font-semibold uppercase tracking-wide text-white/45">
-              Structured task → agents
-            </span>
-            {(["claude", "codex", "cursor"] as const).map((key) => (
-              <label
-                key={key}
-                className="inline-flex items-center gap-1.5 text-[11px] text-white/80 cursor-pointer select-none"
-              >
-                <input
-                  type="checkbox"
-                  className="rounded border-white/25 bg-transparent"
-                  checked={structuredAgents[key]}
-                  disabled={structuredTaskBusy}
-                  onChange={(e) =>
-                    setStructuredAgents((prev) => ({ ...prev, [key]: e.target.checked }))
-                  }
-                />
-                {key === "claude" ? "Claude Code" : key === "codex" ? "Codex" : "Cursor"}
-              </label>
-            ))}
+      <LinearIssuesStrip
+        say={say}
+        onTerminalAppend={appendWorkspaceTerminal}
+        onFillTask={setTask}
+        onLinearIssueFocus={setLinearIssueFromStrip}
+        onBriefReadySendToCursor={(text) => {
+          void sendToCursor(text);
+        }}
+      />
+      {resolvedLinearIssueId ? (
+        <div
+          className={`rounded-xl border px-3 py-2.5 ${
+            afterCursorHandoff
+              ? "border-emerald-400/35 bg-emerald-500/[0.07]"
+              : "border-white/[0.08] bg-white/[0.02]"
+          }`}
+        >
+          <div className="text-[11px] text-white/75 leading-snug space-y-1.5">
+            {afterCursorHandoff ? (
+              <p>
+                <span className="font-medium text-emerald-100/95">Cursor has the enriched brief.</span> Finish there, then
+                tap{" "}
+                <strong className="text-emerald-200/90">Done</strong> for <span className="mono">{resolvedLinearIssueId}</span>{" "}
+                on that row in <strong className="text-white/82">My Tasks</strong>. Vmax doesn&apos;t watch Cursor for
+                completion automatically.
+              </p>
+            ) : (
+              <p>
+                Linked issue <span className="mono text-violet-200/95">{resolvedLinearIssueId}</span>. After agent brief{" "}
+                → Cursor succeeds from <strong className="text-white/82">My Tasks</strong>, tap{" "}
+                <strong className="text-white/85">Done</strong> on that row to move it to Linear&apos;s completed column.
+              </p>
+            )}
+            <p className="text-[10px] text-white/40 leading-snug">
+              Maps to your board&apos;s <code className="mono text-white/55">completed</code> workflow type when Linear accepts the update.
+            </p>
           </div>
-          <p className="text-[11px] text-white/48 leading-snug">
-            Uses the description above plus a git snapshot in the backend task and agent prompts. Multiple selections run in parallel locally.
-          </p>
-          <button
-            type="button"
-            disabled={
-              structuredTaskBusy || !!(askPending || resultLoading) || !repoPath || starting
-            }
-            onClick={() => void runStructuredShip()}
-            className="text-[11px] px-3 h-[26px] rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/35 text-emerald-100 disabled:opacity-40 disabled:pointer-events-none"
-          >
-            {structuredTaskBusy ? "Working…" : "Create structured task → selected agents"}
-          </button>
+          {linearUndoAfterDoneId &&
+          resolvedLinearIssueId.trim().toUpperCase() === linearUndoAfterDoneId ? (
+            <div className="flex flex-wrap items-center gap-2 pt-2.5 mt-2 border-t border-white/[0.1]">
+              <span className="text-[10px] text-sky-200/75 shrink-0">Marked Done · mistaken?</span>
+              <button
+                type="button"
+                disabled={linearUndoBusy}
+                aria-label={`Move ${resolvedLinearIssueId} back to In Review in Linear`}
+                onClick={() => void undoLinearMarkedDone()}
+                className="text-[11px] px-3 h-[28px] rounded-md bg-sky-500/22 hover:bg-sky-500/32 border border-sky-400/40 text-sky-50 disabled:opacity-45 disabled:pointer-events-none transition-colors"
+              >
+                {linearUndoBusy ? "Updating Linear…" : "Undo → In Review"}
+              </button>
+              <span className="text-[9.5px] text-white/32 leading-snug">
+                Targets your board&apos;s review column when Linear accepts (
+                <code className="mono text-white/45">state_target</code> in review).
+              </span>
+            </div>
+          ) : null}
         </div>
-      )}
+      ) : null}
 
       {loopUI.active && (
         <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/[0.06] px-3 py-1.5 flex items-center gap-2">
@@ -1274,38 +1283,12 @@ export default function WorkspacePanel({
         </div>
       )}
 
-      {/* Ask anything — always available, repo or not. */}
-      <TaskPanel
-        task={task}
-        onTaskChange={setTask}
-        onSend={() => {
-          const q = task.trim();
-          if (!q) return;
-          setTask("");
-          runAsk(q);
-        }}
-        onTranscribed={() => say("Got it — I heard you.")}
-        onVoiceError={(m) => say(m, "warn")}
-        sending={askPending || resultLoading}
-        disabled={false}
-        micArmToken={micArmToken}
-      />
-
-      <AskFolderContextBar
-        attachedPath={askAttachPath}
-        repoName={askAttachName}
-        picking={askAttachBusy}
-        freeze={!!(askPending || resultLoading)}
-        onPickFolder={pickAskContextFolder}
-        onClear={clearAskContextFolder}
-      />
-
       <MessageThread messages={messages} pending={askPending} />
 
       {/* Repo-aware tooling — only shown when there's a live repo. */}
       {active && (
         <>
-          <CommandCards cards={cards} />
+          {SHOW_WORKSPACE_COMMAND_CARDS ? <CommandCards cards={cards} /> : null}
 
           {resultKind !== "idle" && (
             <ResultPanel
@@ -1323,6 +1306,8 @@ export default function WorkspacePanel({
             />
           )}
 
+          <LiveAgentsPanel />
+
           <Terminal
             lines={lines}
             running={!!runId}
@@ -1332,13 +1317,13 @@ export default function WorkspacePanel({
             onClear={clearTerminal}
           />
 
-          <TalkBack bubbles={bubbles} />
         </>
       )}
 
       {!active && (
         <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] px-3 py-2 text-[11.5px] text-white/55">
-          You can ask anything above. <span className="text-white">Start Vmax</span> on a repo to unlock plan / typecheck / diff / Cursor handoff.
+          Use <span className="text-white">My Tasks</span> below for agent briefs and Cursor handoff.{" "}
+          <span className="text-white">Start Vmax</span> on a repo for plan checks, terminal runs, and in-panel results.
         </div>
       )}
     </div>

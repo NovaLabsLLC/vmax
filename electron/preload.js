@@ -121,6 +121,7 @@ contextBridge.exposeInMainWorld("exec", {
   getSession: (id) => ipcRenderer.invoke("sessions:get", id),
   saveSession: (s) => ipcRenderer.invoke("sessions:save", s),
   deleteSession: (id) => ipcRenderer.invoke("sessions:delete", id),
+  clearSessions: () => ipcRenderer.invoke("sessions:clear"),
   newSession: (seed) => ipcRenderer.invoke("sessions:new", seed || {}),
   onSessionsUpdated: (cb) => {
     const h = () => cb();
@@ -172,6 +173,8 @@ contextBridge.exposeInMainWorld("exec", {
   taskTrigger: (payload) => ipcRenderer.invoke("task:trigger", payload),
   taskGet: (taskId) => ipcRenderer.invoke("task:get", taskId),
   taskList: () => ipcRenderer.invoke("task:list"),
+  /** Local-only counters (`userData/exec-usage.json`): tasks, structured ship, pill dispatch, Cursor. */
+  getUsageSummary: () => ipcRenderer.invoke("usage:summary"),
   taskCancel: (taskId) => ipcRenderer.invoke("task:cancel", taskId),
   onTaskStatus: (cb) => {
     const h = (_e, p) => cb(p || {});

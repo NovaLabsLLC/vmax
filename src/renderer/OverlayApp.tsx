@@ -49,15 +49,21 @@ export default function OverlayApp() {
   // toggle the pill's busy shimmer while a dispatch is in flight).
   const [dispatchBusy, setDispatchBusy] = useState(false);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
+  /** Multiple concurrent exec:dispatch agents all emit running → done/error; track depth. */
+  const dispatchBusyDepthRef = useRef(0);
 
   useEffect(() => {
     if (typeof window.exec.onAgentsStatus !== "function") return;
     return window.exec.onAgentsStatus((evt: AgentStatusEvent) => {
-      if (evt.state === "running") { setDispatchBusy(true); setDispatchError(null); }
-      if (evt.state === "done") setDispatchBusy(false);
-      if (evt.state === "error") {
-        setDispatchBusy(false);
-        if (evt.error) setDispatchError(evt.error);
+      if (evt.state === "running") {
+        dispatchBusyDepthRef.current += 1;
+        setDispatchBusy(true);
+        setDispatchError(null);
+      }
+      if (evt.state === "done" || evt.state === "error") {
+        dispatchBusyDepthRef.current = Math.max(0, dispatchBusyDepthRef.current - 1);
+        if (evt.state === "error" && evt.error) setDispatchError(evt.error);
+        if (dispatchBusyDepthRef.current === 0) setDispatchBusy(false);
       }
     });
   }, []);

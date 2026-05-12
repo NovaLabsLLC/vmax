@@ -79,7 +79,7 @@ export default function Terminal({ lines, running, command, exitCode, onCancel, 
                 key={i}
                 className={
                   l.stream === "stderr" ? "text-red-300/95"
-                  : l.stream === "meta" ? "text-emerald-300/85"
+                  : l.stream === "meta" ? "text-white/55"
                   : "text-white/80"
                 }
               >

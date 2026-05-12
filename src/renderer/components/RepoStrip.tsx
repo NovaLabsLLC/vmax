@@ -9,7 +9,7 @@ export default function RepoStrip({ repo, onRescan }: { repo: RepoContext | null
     return <div className="text-[11px] text-red-300/85">{repo.error}</div>;
   }
   return (
-    <div className="flex items-center gap-1.5 px-0.5">
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 px-0.5">
       <Chip icon={<FolderIcon />} title={repo.root}>{repo.name}</Chip>
       <Chip icon={<BranchIcon />} tone="branch" mono>{repo.branch}</Chip>
       <Chip icon={<FilesIcon />}>{repo.changedFiles.length} changed</Chip>

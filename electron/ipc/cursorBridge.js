@@ -10,18 +10,22 @@
 //      message telling the user to paste manually.
 
 const { spawn } = require("child_process");
-const { ipcMain, clipboard, systemPreferences, shell } = require("electron");
+const { ipcMain, clipboard, systemPreferences, shell, app } = require("electron");
+const usageStats = require("../utils/usageStats.js");
 const { sleep } = require("../utils.js");
 const { runApplescriptFile, cursorPasteApplescript } = require("../applescript.js");
 const { CURSOR_CLIPBOARD_SAFETY_FOOTER } = require("../../utils/commandSafety.js");
 
 function register() {
   ipcMain.handle("exec:send-to-cursor-chat", async (_evt, { repoPath, prompt }) => {
-    if (process.platform !== "darwin")
+    if (process.platform !== "darwin") {
+      usageStats.record(app, "cursor_handoff", { agent: "cursor", ok: false });
       return { ok: false, reason: "platform", message: "Auto-send is only wired up on macOS." };
+    }
 
     if (!systemPreferences.isTrustedAccessibilityClient(false)) {
       systemPreferences.isTrustedAccessibilityClient(true);
+      usageStats.record(app, "cursor_handoff", { agent: "cursor", ok: false });
       return {
         ok: false, reason: "accessibility",
         message: "Grant Accessibility permission to Electron, then quit and run again.",
@@ -58,10 +62,12 @@ function register() {
     if (first.code !== 0) {
       const second = await runApplescriptFile(cursorPasteApplescript("l"));
       if (second.code === 0) {
+        usageStats.record(app, "cursor_handoff", { agent: "cursor", ok: true });
         return { ok: true, pastedVia: "applescript", pasteShortcut: "⌘L", ...base };
       }
       first = second;
     } else {
+      usageStats.record(app, "cursor_handoff", { agent: "cursor", ok: true });
       return { ok: true, pastedVia: "applescript", pasteShortcut: "⌘I", ...base };
     }
 
@@ -73,7 +79,7 @@ function register() {
     } catch {
       /* ignore */
     }
-    return {
+    const out = {
       ok: true,
       pastedVia: "clipboard-only",
       automationFailed: true,
@@ -83,6 +89,8 @@ function register() {
         ? "Tried ⌘I and ⌘L automation; clipboard is ready — focus Cursor and press ⌘V in Agent or Chat."
         : first.stderr || "AppleScript failed for ⌘I and ⌘L — prompt is on the clipboard.",
     };
+    usageStats.record(app, "cursor_handoff", { agent: "cursor", ok: out.ok === true });
+    return out;
   });
 }
 

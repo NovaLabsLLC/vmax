@@ -78,4 +78,9 @@ function create(app, seed = {}) {
   return save(app, session);
 }
 
-module.exports = { list, get, save, remove, create };
+/** Remove every persisted chat session (atomic write). */
+function clearAll(app) {
+  writeAll(app, { sessions: [] });
+}
+
+module.exports = { list, get, save, remove, create, clearAll };

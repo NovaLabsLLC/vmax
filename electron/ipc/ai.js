@@ -3,7 +3,8 @@
 // now an HTTP client to the FastAPI service in backend/. Model API keys
 // live on the server, not in this process.
 
-const { ipcMain } = require("electron");
+const { ipcMain, app } = require("electron");
+const usageStats = require("../utils/usageStats.js");
 const {
   planTask,
   explainFailure,
@@ -30,14 +31,16 @@ function register() {
   // Strict VmaxTask creation. The renderer just passes `{ prompt }` — the
   // backend is repo-agnostic, and taskTrigger.js fills in the actual repo
   // path from state when it spawns an agent.
-  ipcMain.handle("ai:task", (_evt, payload) => {
+  ipcMain.handle("ai:task", async (_evt, payload) => {
     const prompt = String((payload && payload.prompt) || "").trim();
     if (!prompt) return { ok: false, error: "empty prompt" };
     const repoContextSummary = (payload && payload.repoContextSummary) || "";
-    return createVmaxTask({
+    const out = await createVmaxTask({
       prompt,
       repoContextSummary: String(repoContextSummary || "").trim(),
     });
+    usageStats.record(app, out && out.ok === true ? "task_create_ok" : "task_create_fail", {});
+    return out;
   });
 }
 

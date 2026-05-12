@@ -5,7 +5,8 @@
 // react, and vice-versa for status pushes. All overlay sizing IPC (renderer
 // → main) also lives here since it just delegates into windows.js.
 
-const { ipcMain, BrowserWindow } = require("electron");
+const { app, ipcMain, BrowserWindow } = require("electron");
+const usageStats = require("./utils/usageStats.js");
 const {
   getCommandWindow,
   getOverlayWindow,
@@ -31,6 +32,18 @@ function sendToCommandCenter(channel, payload) {
 function sendToOverlay(channel, payload) {
   const w = getOverlayWindow();
   if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
+}
+
+/** Run transcripts can be large; only the Command Center subscribes (Workspace). */
+function broadcastRunData(runId, stream, chunk) {
+  sendToCommandCenter("exec:run:data", { runId, stream, chunk });
+}
+
+function broadcastRunEnd(runId, code, error) {
+  const c = typeof code === "number" && !Number.isNaN(code) ? code : -1;
+  const payload = { runId, code: c };
+  if (error) payload.error = String(error);
+  sendToCommandCenter("exec:run:end", payload);
 }
 
 function register() {
@@ -121,6 +134,14 @@ function register() {
     if (on) win.setIgnoreMouseEvents(false);
     else win.setIgnoreMouseEvents(true, { forward: true });
   });
+
+  ipcMain.handle("usage:summary", () => usageStats.summary(app));
 }
 
-module.exports = { register, sendToCommandCenter, sendToOverlay };
+module.exports = {
+  register,
+  sendToCommandCenter,
+  sendToOverlay,
+  broadcastRunData,
+  broadcastRunEnd,
+};

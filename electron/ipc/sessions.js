@@ -25,6 +25,11 @@ function register() {
     broadcastSessionsUpdated();
     return out;
   });
+  ipcMain.handle("sessions:clear", () => {
+    sessions.clearAll(app);
+    broadcastSessionsUpdated();
+    return { ok: true };
+  });
 }
 
 module.exports = { register };

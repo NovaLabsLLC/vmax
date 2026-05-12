@@ -15,12 +15,13 @@
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
-const { ipcMain, clipboard, systemPreferences } = require("electron");
+const { ipcMain, app, systemPreferences, clipboard } = require("electron");
 
+const usageStats = require("../utils/usageStats.js");
 const { readState } = require("../state.js");
 const { sleep } = require("../utils.js");
 const { runApplescriptFile, cursorPasteApplescript } = require("../applescript.js");
-const { sendToCommandCenter, sendToOverlay } = require("../ipcBus.js");
+const { sendToCommandCenter, sendToOverlay, broadcastRunData, broadcastRunEnd } = require("../ipcBus.js");
 const { runners, friendlyClaudeError, friendlyCodexError } = require("./runners.js");
 const { CURSOR_CLIPBOARD_SAFETY_FOOTER } = require("../../utils/commandSafety.js");
 const { routeAgent } = require("./dispatch.js");
@@ -199,18 +200,40 @@ function spawnClaude({ rec, repoPath, prompt }) {
     env: { ...process.env, FORCE_COLOR: "0" },
     shell: false,
   });
-  runners.set(rec.runId, child);
+  const { runId } = rec;
+  runners.set(runId, child);
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr += d.toString()));
+  let streamEnded = false;
+  const finishRunWire = (code, error) => {
+    if (streamEnded) return;
+    streamEnded = true;
+    const c = typeof code === "number" && !Number.isNaN(code) ? code : -1;
+    broadcastRunEnd(runId, c, error);
+  };
+  child.stdout.on("data", (d) => broadcastRunData(runId, "stdout", d.toString()));
+  child.stderr.on("data", (d) => {
+    const chunk = d.toString();
+    stderr += chunk;
+    broadcastRunData(runId, "stderr", chunk);
+  });
   child.once("spawn", () => setStatus(rec, "running"));
   child.on("close", (code) => {
-    runners.delete(rec.runId);
-    if (code === 0) setStatus(rec, "completed", { code });
-    else setStatus(rec, "failed", { code, error: stderr.slice(-2000) || `exit ${code}` });
+    runners.delete(runId);
+    const c = code === null || code === undefined ? -1 : code;
+    if (code === 0) {
+      setStatus(rec, "completed", { code: c });
+      finishRunWire(c);
+    } else {
+      const errMsg = stderr.slice(-2000) || `exit ${c}`;
+      setStatus(rec, "failed", { code: c, error: errMsg });
+      finishRunWire(c, errMsg);
+    }
   });
   child.on("error", (err) => {
-    runners.delete(rec.runId);
-    setStatus(rec, "failed", { error: friendlyClaudeError(err) });
+    runners.delete(runId);
+    const msg = friendlyClaudeError(err);
+    setStatus(rec, "failed", { error: msg });
+    finishRunWire(-1, msg);
   });
 }
 
@@ -223,18 +246,40 @@ function spawnCodex({ rec, repoPath, prompt }) {
     env: { ...process.env, FORCE_COLOR: "0" },
     shell: false,
   });
-  runners.set(rec.runId, child);
+  const { runId } = rec;
+  runners.set(runId, child);
   let stderr = "";
-  child.stderr.on("data", (d) => (stderr += d.toString()));
+  let streamEnded = false;
+  const finishRunWire = (code, error) => {
+    if (streamEnded) return;
+    streamEnded = true;
+    const c = typeof code === "number" && !Number.isNaN(code) ? code : -1;
+    broadcastRunEnd(runId, c, error);
+  };
+  child.stdout.on("data", (d) => broadcastRunData(runId, "stdout", d.toString()));
+  child.stderr.on("data", (d) => {
+    const chunk = d.toString();
+    stderr += chunk;
+    broadcastRunData(runId, "stderr", chunk);
+  });
   child.once("spawn", () => setStatus(rec, "running"));
   child.on("close", (code) => {
-    runners.delete(rec.runId);
-    if (code === 0) setStatus(rec, "completed", { code });
-    else setStatus(rec, "failed", { code, error: stderr.slice(-2000) || `exit ${code}` });
+    runners.delete(runId);
+    const c = code === null || code === undefined ? -1 : code;
+    if (code === 0) {
+      setStatus(rec, "completed", { code: c });
+      finishRunWire(c);
+    } else {
+      const errMsg = stderr.slice(-2000) || `exit ${c}`;
+      setStatus(rec, "failed", { code: c, error: errMsg });
+      finishRunWire(c, errMsg);
+    }
   });
   child.on("error", (err) => {
-    runners.delete(rec.runId);
-    setStatus(rec, "failed", { error: friendlyCodexError(err) });
+    runners.delete(runId);
+    const msg = friendlyCodexError(err);
+    setStatus(rec, "failed", { error: msg });
+    finishRunWire(-1, msg);
   });
 }
 
@@ -319,6 +364,7 @@ function register() {
       };
       taskRuns.set(runId, rec);
       setStatus(rec, "failed", { error: rec.error });
+      usageStats.record(app, "structured_task_fail", { ok: false });
       return { ok: false, taskId: clean.id, status: "failed", error: rec.error };
     }
 
@@ -339,6 +385,7 @@ function register() {
       };
       taskRuns.set(runId, rec);
       setStatus(rec, "failed", { error: resolved.error });
+      usageStats.record(app, "structured_task_fail", { ok: false });
       return {
         ok: false,
         taskId: workingTask.id,
@@ -352,17 +399,48 @@ function register() {
 
     const promptPayload = buildPromptPayload(workingTask, { repoSummary });
 
+    /** @type {Record<string, string> | null} */
+    let promptOverrides = null;
+    const pb = payload && payload.promptByAgent;
+    if (pb && typeof pb === "object" && !Array.isArray(pb)) {
+      promptOverrides = {};
+      const keysForLog = [];
+      for (const [rawK, rawV] of Object.entries(pb)) {
+        const agentKey = normalizeTriggerAgent(rawK);
+        const val = typeof rawV === "string" ? rawV.trim() : "";
+        if (!agentKey || !val) continue;
+        promptOverrides[agentKey] = val.slice(0, 200_000);
+        keysForLog.push(agentKey);
+      }
+      if (!Object.keys(promptOverrides).length) {
+        promptOverrides = null;
+      } else if (keysForLog.length) {
+        console.log(`[task:trigger] per-agent prompts: ${keysForLog.join(", ")}`);
+      }
+    }
+    if (resolved.decisions.length > 1) {
+      console.log(
+        `[task:trigger] structured parallel (${resolved.decisions.length}): ${resolved.decisions
+          .map((d) => d.agent)
+          .join(", ")}`,
+      );
+    }
+
     /** @type {{ runId: string; selectedAgent: string | null; routingReason: string; status: string }[]} */
     const runsOut = [];
     let lastErr;
 
     for (const { agent, reason } of resolved.decisions) {
       const runId = `task-${workingTask.id}-${agent}-${Math.random().toString(36).slice(2, 7)}`;
+      const dispatched =
+        promptOverrides && typeof promptOverrides[agent] === "string" && promptOverrides[agent].trim()
+          ? promptOverrides[agent]
+          : promptPayload;
       const rec = {
         task: workingTask,
         selectedAgent: agent,
         routingReason: reason,
-        promptPayload,
+        promptPayload: dispatched,
         status: "created",
         error: null,
         runId,
@@ -381,7 +459,7 @@ function register() {
           lastErr = lastErr || `unknown agent: ${agent}`;
           continue;
         }
-        dispatchAgent(agent, { rec, repoPath: repoPathResolved, prompt: promptPayload });
+        dispatchAgent(agent, { rec, repoPath: repoPathResolved, prompt: dispatched });
         setStatus(rec, "triggered");
         runsOut.push({
           runId: rec.runId,
@@ -405,6 +483,22 @@ function register() {
     const first = resolved.decisions[0];
     const multi = resolved.decisions.length > 1;
     const ok = runsOut.some((r) => r.status === "triggered");
+    const triggeredAgents = runsOut
+      .filter((r) => r.status === "triggered")
+      .map((r) => r.selectedAgent)
+      .filter(Boolean);
+    if (ok) {
+      usageStats.record(app, "structured_task_ok", {
+        agents: triggeredAgents,
+        taskId: workingTask.id,
+        ok: true,
+      });
+    } else {
+      usageStats.record(app, "structured_task_fail", {
+        taskId: workingTask.id,
+        ok: false,
+      });
+    }
     return {
       ok,
       taskId: workingTask.id,

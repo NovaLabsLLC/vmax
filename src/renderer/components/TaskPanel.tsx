@@ -7,6 +7,14 @@ type Props = {
   task: string;
   onTaskChange: (v: string) => void;
   onSend: () => void;
+  /** Sends current task text into Cursor (Composer / agent) when set. */
+  onRunInCursor?: () => void;
+  /** Linked Linear id (viewer ref or parsed from task) — enables “mark done”. */
+  linearIssueId?: string | null;
+  /** PATCH workflow to completed on Linear (`state_target: done`). */
+  onMarkLinearDone?: () => void | Promise<void>;
+  /** Disables Linear button while PATCH in flight */
+  markLinearDoneBusy?: boolean;
   onTranscribed?: (text: string) => void;
   onVoiceError?: (message: string) => void;
   sending?: boolean;
@@ -18,6 +26,10 @@ export default function TaskPanel({
   task,
   onTaskChange,
   onSend,
+  onRunInCursor,
+  linearIssueId,
+  onMarkLinearDone,
+  markLinearDoneBusy,
   onTranscribed,
   onVoiceError,
   sending,
@@ -29,6 +41,10 @@ export default function TaskPanel({
   const [transcribing, setTranscribing] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const canSend = !disabled && !sending && task.trim().length > 0;
+  const canRunCursor = Boolean(onRunInCursor) && canSend;
+  const linearIdTrim = `${linearIssueId ?? ""}`.trim();
+  const showMarkLinearDone =
+    linearIdTrim.length > 0 && typeof onMarkLinearDone === "function";
 
   const longPressArmRef = useRef(false);
   const holdPendingRef = useRef(false);
@@ -50,8 +66,8 @@ export default function TaskPanel({
     } catch (err) {
       const msg =
         err instanceof Error && /Permission|NotAllowed|denied/i.test(err.message)
-          ? "Microphone permission denied — you can still type your task."
-          : "Couldn’t use the microphone — you can still type your task.";
+          ? "Microphone permission denied — tap a Linear row or use My Tasks to set the task."
+          : "Couldn’t use the microphone — try again or pick a Linear issue.";
       setVoiceError(msg);
       onVoiceError?.(msg);
     }
@@ -69,10 +85,7 @@ export default function TaskPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [micArmToken, disabled, sending]);
 
-  /**
-   * Keyboard push-to-talk: Option/Alt + Space toggles the mic. Works whether
-   * the textarea is focused or not. Ignores OS key-repeat.
-   */
+  /** Keyboard push-to-talk: Option/Alt + Space toggles the mic. Ignores OS key-repeat. */
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const isToggle = e.altKey && !e.metaKey && !e.ctrlKey && (e.code === "Space" || e.key === " ");
@@ -171,7 +184,7 @@ export default function TaskPanel({
       }
     } catch (err) {
       console.error(err);
-      const msg = "Transcription failed — edit your task or try again.";
+      const msg = "Transcription failed — try speaking again.";
       setVoiceError(msg);
       onVoiceError?.(msg);
     } finally {
@@ -182,37 +195,90 @@ export default function TaskPanel({
 
   const micActive = audio.isCapturing();
 
-  /** Taller textarea when pasted content has many logical lines (e.g. Linear import). */
-  const textareaRows = Math.min(24, Math.max(2, (task.match(/\n/g)?.length ?? 0) + 1));
-
   return (
     <div className="relative rounded-2xl bg-white/[0.03] border border-white/[0.06] p-3 pr-[88px]">
-      <div className="flex items-center justify-between mb-1">
-        <div className="text-[10px] uppercase tracking-[0.14em] text-white/40">Task</div>
-        <div className="text-[10px] text-white/30">
-          Hold mic, tap to toggle, ⌥Space, or type
+      <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="text-[10px] uppercase tracking-[0.14em] text-white/40 shrink-0">Task</div>
+          {onRunInCursor ? (
+            <button
+              type="button"
+              onClick={() => onRunInCursor()}
+              disabled={!canRunCursor}
+              title={
+                canRunCursor
+                  ? "Open Cursor for this repo and paste this task into the agent"
+                  : "Add a task first (mic or My Tasks)"
+              }
+              className="shrink-0 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-md
+                         border border-white/[0.14] bg-white/[0.07] hover:bg-white/[0.11] text-white/88
+                         disabled:opacity-35 disabled:pointer-events-none transition-colors"
+            >
+              Run in Cursor
+            </button>
+          ) : null}
+          {showMarkLinearDone ? (
+            <button
+              type="button"
+              onClick={() => void onMarkLinearDone?.()}
+              disabled={disabled || !!markLinearDoneBusy}
+              aria-label={`Mark Linear issue ${linearIdTrim} done`}
+              title={`Mark ${linearIdTrim} completed in Linear`}
+              className="
+                shrink-0 inline-flex items-center gap-1.5 h-8 px-3 rounded-full
+                border border-white/[0.08] bg-black/25 text-white/75 text-[11px] font-medium
+                shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]
+                transition-[color,background-color,border-color,transform] duration-150 ease-out
+                hover:border-emerald-400/35 hover:bg-emerald-500/15 hover:text-emerald-100
+                hover:shadow-[0_0_0_1px_rgba(52,211,153,0.1)]
+                disabled:opacity-35 disabled:pointer-events-none active:scale-[0.97]
+              "
+            >
+              {markLinearDoneBusy ? (
+                <span
+                  className="inline-block size-3 rounded-full border-2 border-emerald-400/30 border-t-emerald-400 animate-spin"
+                  aria-hidden
+                />
+              ) : (
+                <svg
+                  className="size-3 shrink-0 text-emerald-200/95"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
+                >
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              )}
+              {markLinearDoneBusy ? "Updating…" : "Done"}
+            </button>
+          ) : null}
+        </div>
+        <div className="text-[10px] text-white/30 text-right ml-auto">
+          Hold mic, tap to toggle, or ⌥Space
         </div>
       </div>
-      <textarea
-        value={task}
-        onChange={(e) => onTaskChange(e.target.value)}
-        onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && canSend) {
-            e.preventDefault();
-            onSend();
-          }
-        }}
-        disabled={disabled}
-        placeholder={
-          transcribing ? "Transcribing…"
-          : micActive ? "Listening…"
-          : "Add RevenueCat paywall flow"
-        }
-        rows={textareaRows}
-        className="w-full bg-transparent outline-none border-none resize-y min-h-[56px] max-h-[70vh]
-                   text-[13px] text-white placeholder-white/30 leading-relaxed
-                   focus:placeholder-white/40"
-      />
+      {/* No text field — task comes from voice, Linear/My Tasks clicks, or other panels that call onTaskChange. */}
+      <div
+        aria-live="polite"
+        aria-label={task.trim() ? "Current task preview" : "Task empty"}
+        className={`w-full min-h-[52px] max-h-[50vh] overflow-y-auto rounded-lg border px-2.5 py-2 text-[13px] leading-relaxed
+          ${disabled ? "opacity-45 pointer-events-none" : ""}
+          ${task.trim()
+            ? "border-white/[0.08] bg-black/20 text-white/90 whitespace-pre-wrap break-words"
+            : "border-dashed border-white/[0.1] bg-white/[0.02] text-white/38"}`}
+      >
+        {task.trim()
+          ? task
+          : transcribing
+            ? "Transcribing…"
+            : micActive
+              ? "Listening…"
+              : "Use the mic below, or open an issue under My Tasks to load a task."}
+      </div>
 
       {voiceError && !disabled && (
         <div className="text-[11px] text-amber-200/90 leading-snug mt-1.5 pr-[88px]" role="status">
@@ -244,7 +310,7 @@ export default function TaskPanel({
         type="button"
         onClick={() => onSend()}
         disabled={!canSend}
-        title="Plan Task (⌘ Enter)"
+        title="Plan Task — send current task when it has content"
         className={`absolute right-2.5 bottom-2.5 h-8 w-8 rounded-full flex items-center justify-center
                     transition-all
                     ${canSend

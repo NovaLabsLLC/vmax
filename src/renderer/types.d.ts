@@ -252,6 +252,7 @@ declare global {
       getSession: (id: string) => Promise<any | null>;
       saveSession: (s: any) => Promise<any>;
       deleteSession: (id: string) => Promise<void>;
+      clearSessions: () => Promise<{ ok: boolean }>;
       newSession: (seed?: { title?: string; repoPath?: string; repoName?: string }) => Promise<any>;
       onSessionsUpdated: (cb: () => void) => () => void;
 
@@ -283,7 +284,23 @@ declare global {
       openclawAgent: (p: { runId: string; repoPath: string; message: string }) => Promise<{ started: boolean; error?: string }>;
       runClaudeCli: (p: { runId: string; repoPath: string; prompt: string }) => Promise<{ started: boolean; error?: string }>;
       runCodexCli: (p: { runId: string; repoPath: string; prompt: string }) => Promise<{ started: boolean; error?: string }>;
-      dispatch: (p: { prompt: string; agent?: ExecAgent }) => Promise<{ ok: boolean; agent?: ExecAgent; reason?: string; runId?: string; error?: string }>;
+      dispatch: (
+        payload: {
+          prompt?: string;
+          agent?: ExecAgent;
+          agentPrompts?: { agent: ExecAgent; prompt: string; reason?: string }[];
+        },
+      ) => Promise<
+        | { ok: false; error: string }
+        | {
+          ok: true;
+          mode?: "single" | "multi";
+          agent?: ExecAgent | string;
+          reason?: string;
+          runId?: string;
+          runs?: { agent: ExecAgent | string; reason?: string; runId: string }[];
+        }
+      >;
       onAgentsStatus: (cb: (p: AgentStatusEvent) => void) => () => void;
       cancelRun: (runId: string) => Promise<boolean>;
       onRunData: (cb: (e: { runId: string; stream: "stdout" | "stderr"; chunk: string }) => void) => () => void;
@@ -326,9 +343,17 @@ declare global {
         agents?: ExecAgent[];
         repoPath?: string | null;
         repoSummary?: string | null;
+        /** When exactly two agents are selected, Workspace can send trimmed overrides per runner. Empty fields fall back to the shared structured payload. */
+        promptByAgent?: Partial<Record<ExecAgent, string>>;
       }) => Promise<VmaxTaskTriggerResult>;
       taskGet: (taskId: string) => Promise<VmaxTaskRunRecord | null>;
       taskList: () => Promise<VmaxTaskRunRecord[]>;
+      /** Local aggregates in `exec-usage.json` — no prompts stored. */
+      getUsageSummary: () => Promise<{
+        updatedAt: number;
+        totals: Record<string, number>;
+        byAgent: Record<string, number>;
+      }>;
       taskCancel: (taskId: string) => Promise<boolean>;
       onTaskStatus: (cb: (r: VmaxTaskRunRecord) => void) => () => void;
       explainFailure: (p: {

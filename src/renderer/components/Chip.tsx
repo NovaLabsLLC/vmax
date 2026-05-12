@@ -12,17 +12,17 @@ type Props = {
 export default function Chip({ children, icon, tone = "default", mono, title }: Props) {
   const toneClass =
     tone === "branch"
-      ? "text-emerald-300/90 bg-emerald-400/[0.08] border-emerald-400/15"
+      ? "text-emerald-200/62 bg-transparent border-emerald-400/14"
       : tone === "warn"
-      ? "text-amber-200/90 bg-amber-400/[0.08] border-amber-400/15"
+      ? "text-amber-200/70 bg-transparent border-amber-400/16"
       : tone === "success"
-      ? "text-emerald-300/90 bg-emerald-400/[0.08] border-emerald-400/15"
-      : "text-white/75 bg-white/[0.05] border-white/[0.08]";
+      ? "text-emerald-200/62 bg-transparent border-emerald-400/14"
+      : "text-white/[0.55] bg-transparent border-white/[0.10]";
   return (
     <span
       title={title}
-      className={`inline-flex items-center gap-1 h-[20px] px-2 rounded-full border
-                  text-[10.5px] font-medium ${mono ? "mono" : ""} ${toneClass}`}
+      className={`inline-flex items-center gap-1 h-[21px] px-2 rounded-md border
+                  text-[10.5px] font-medium tracking-tight ${mono ? "mono" : ""} ${toneClass}`}
     >
       {icon && <span className="opacity-90">{icon}</span>}
       <span className="truncate max-w-[160px]">{children}</span>

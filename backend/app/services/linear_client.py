@@ -569,6 +569,33 @@ _ISSUE_UPDATE_MUTATION = (
     "}"
 )
 
+_TEAMS_QUERY = """
+query LinearTeamsQuery($first: Int!) {
+  teams(first: $first) {
+    nodes { id key name }
+  }
+}
+"""
+
+_VIEWER_SELF_QUERY = "query ViewerSelf { viewer { id } }"
+
+_ISSUE_CREATE_RESULT = """
+  id
+  identifier
+  title
+  url
+  state { id name type }
+  team { id key name }
+"""
+
+_ISSUE_CREATE_MUTATION = (
+    "mutation IssueCreateLinear($input: IssueCreateInput!) {"
+    " issueCreate(input: $input) { success"
+    " issue {" + _ISSUE_CREATE_RESULT + "}"
+    " }"
+    "}"
+)
+
 
 # ---------------------------------------------------------------------------
 # Explicit-key helpers + workspace fan-out (`linear_workspaces` store /
@@ -642,6 +669,83 @@ async def verify_linear_key(api_key: str) -> dict[str, str]:
         "workspace_name": org.get("name") or "",
         "workspace_url_key": org.get("urlKey") or "",
     }
+
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.I,
+)
+
+
+async def list_teams_for_key(api_key: str, *, first: int = 250) -> list[dict[str, Any]]:
+    """Teams visible to the API key holder (typically the whole workspace)."""
+
+    capped = max(1, min(int(first), 250))
+    data = await linear_graphql_with_key(api_key, _TEAMS_QUERY, {"first": capped})
+    return list(((data.get("teams") or {}).get("nodes") or []))
+
+
+async def resolve_team_uuid(api_key: str, team_key_or_id: str) -> str:
+    """Resolve Linear ``teamId`` from a UUID or short team ``key`` (e.g. ``EXE``)."""
+
+    raw = (team_key_or_id or "").strip()
+    if not raw:
+        raise LinearClientError("team_id is empty")
+    if _UUID_RE.fullmatch(raw):
+        return raw
+    teams = await list_teams_for_key(api_key)
+    up = raw.upper()
+    for t in teams:
+        if (((t.get("key") or "")).strip().upper()) == up:
+            tid = t.get("id")
+            if isinstance(tid, str) and tid.strip():
+                return tid.strip()
+    raise LinearClientError(f"No team matches {raw!r} — try a Linear team key (e.g. EXE) or team UUID.")
+
+
+async def create_linear_issue_with_key(
+    api_key: str,
+    *,
+    team_id: str,
+    title: str,
+    description: str | None = None,
+    priority: int | None = None,
+    assignee_self: bool = False,
+) -> dict[str, Any]:
+    """Create an issue via ``issueCreate``. ``team_id`` may be UUID or board key."""
+
+    team_uuid = await resolve_team_uuid(api_key, team_id)
+    ttl = (title or "").strip()
+    if not ttl:
+        raise LinearClientError("Issue title cannot be blank")
+
+    issue_input: dict[str, Any] = {"teamId": team_uuid, "title": ttl}
+    desc = str(description).strip() if description is not None else ""
+    if desc:
+        issue_input["description"] = desc
+    if priority is not None:
+        issue_input["priority"] = int(priority)
+    if assignee_self:
+        vd = await linear_graphql_with_key(api_key, _VIEWER_SELF_QUERY)
+        vid = ((vd.get("viewer") or {}).get("id") or "").strip()
+        if vid:
+            issue_input["assigneeId"] = vid
+
+    data = await linear_graphql_with_key(
+        api_key,
+        _ISSUE_CREATE_MUTATION,
+        {"input": issue_input},
+    )
+    mutation = data.get("issueCreate") or {}
+    if mutation.get("success") is not True:
+        raise LinearClientError(
+            "Linear issueCreate failed — check permissions, team membership, "
+            f"and field limits. Payload: {mutation!r}",
+        )
+    issue = mutation.get("issue")
+    if not isinstance(issue, dict) or not issue:
+        raise LinearClientError("Linear issueCreate returned no issue.")
+    return issue
 
 
 async def get_my_open_issues_with_key(
