@@ -5,8 +5,8 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: #111111;
-  color: #f5f5f7;
+  background: #010916;
+  color: #ebf0e7;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -14,15 +14,15 @@ body {
   font-family: Inter, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
 }
 ::selection {
-  background: rgba(255, 255, 255, 0.18);
-  color: #fff;
+  background: rgba(0, 46, 120, 0.45);
+  color: #ebf0e7;
 }
 a {
   color: inherit;
 }
 button:focus-visible,
 a:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.45);
+  outline: 2px solid rgba(0, 46, 120, 0.85);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -34,6 +34,168 @@ a:focus-visible {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* --- Hero H1: staggered words + gradient “coding agents.” + shimmer --- */
+@keyframes vmax-hero-word {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0.2em, -8px) rotateX(-12deg) scale(0.95);
+    filter: blur(10px);
+  }
+  70% {
+    filter: blur(0.5px);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotateX(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes vmax-hero-shimmer {
+  0% {
+    background-position: 130% center;
+  }
+  100% {
+    background-position: -130% center;
+  }
+}
+
+.vmax-hero-title {
+  padding-top: 0.22em;
+  padding-bottom: 0.1em;
+  overflow: visible;
+}
+
+.vmax-hero-title .vmax-hero-word {
+  display: inline-block;
+  opacity: 0;
+  transform-style: preserve-3d;
+  will-change: transform, filter, opacity;
+  animation: vmax-hero-word 1.05s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.vmax-hero-title .vmax-hero-line-top {
+  line-height: 0.94;
+}
+
+.vmax-hero-title .vmax-hero-gradient-line {
+  display: inline-block;
+  padding: 0 0 0.02em;
+  line-height: 1.08;
+  background-image: linear-gradient(
+    108deg,
+    rgba(235, 240, 231, 0.22) 0%,
+    rgba(235, 240, 231, 0.9) 18%,
+    #002e78 36%,
+    rgba(91, 168, 154, 0.88) 52%,
+    rgba(235, 240, 231, 0.78) 72%,
+    rgba(235, 240, 231, 0.28) 100%
+  );
+  background-size: 340% 120%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation:
+    vmax-hero-word 1.1s cubic-bezier(0.16, 1, 0.3, 1) forwards,
+    vmax-hero-shimmer 11s linear 0.35s infinite;
+}
+
+.vmax-hero-title .vmax-hero-line-gradient-wrap {
+  white-space: nowrap;
+}
+
+.vmax-hero-title .vmax-hero-subblock {
+  position: relative;
+  margin-top: -0.06em;
+}
+
+.vmax-hero-title.vmax-hero-no-motion .vmax-hero-word {
+  animation: none !important;
+  opacity: 1 !important;
+  transform: none !important;
+  filter: none !important;
+  will-change: auto;
+}
+
+.vmax-hero-title.vmax-hero-no-motion .vmax-hero-gradient-line {
+  background: none !important;
+  -webkit-text-fill-color: rgba(235, 240, 231, 0.62) !important;
+  color: rgba(235, 240, 231, 0.62) !important;
+  animation: none !important;
+}
+
+/* Primary CTA — animated conic ring (palette-aligned) */
+.vmax-rainbow-ring {
+  display: inline-flex;
+  vertical-align: middle;
+  padding: 2px;
+  border-radius: 10px;
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.vmax-rainbow-ring::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  left: 50%;
+  top: 50%;
+  width: 220%;
+  height: 220%;
+  margin-left: -110%;
+  margin-top: -110%;
+  background: conic-gradient(
+    from 0deg,
+    #002e78,
+    #1a4a9e,
+    #ebf0e7,
+    #5d9ed4,
+    #002e78,
+    #355a98,
+    #9ebfd4,
+    #002e78
+  );
+  animation: vmax-rainbow-spin 2.8s linear infinite;
+}
+
+.vmax-rainbow-ring > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes vmax-rainbow-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vmax-rainbow-ring::before {
+    animation: none !important;
+  }
+}
+
+/* Sticky nav in-page links */
+.vmax-nav-link {
+  color: rgba(235, 240, 231, 0.72);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  padding: 8px 12px;
+  border-radius: 8px;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease;
+  white-space: nowrap;
+}
+.vmax-nav-link:hover {
+  color: #ebf0e7;
+  background: rgba(235, 240, 231, 0.07);
 }
 
 /* Scroll-stagger lists + cards (intersection-driven live classes). */
@@ -182,5 +344,17 @@ a:focus-visible {
   .vmax-session-awaiting {
     animation: none !important;
     text-shadow: none !important;
+  }
+  .vmax-hero-title .vmax-hero-word {
+    opacity: 1 !important;
+    transform: none !important;
+    filter: none !important;
+    animation: none !important;
+  }
+  .vmax-hero-title .vmax-hero-gradient-line {
+    background: none !important;
+    -webkit-text-fill-color: rgba(235, 240, 231, 0.62) !important;
+    color: rgba(235, 240, 231, 0.62) !important;
+    animation: none !important;
   }
 }

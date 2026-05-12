@@ -302,6 +302,13 @@ const Logo = ({ size = 44, wordmark = true, motion = true }) => {
 };
 
 // ---------------- Nav ----------------
+const NAV_ITEMS = [
+  { href: '#product', label: 'Product' },
+  { href: '#features', label: 'Capabilities' },
+  { href: '#workflow', label: 'Workflow' },
+  { href: '#pricing', label: 'Pricing' },
+];
+
 const Nav = () => {
   const [scrolled, setScrolled] = useState(false);
   const { ref, revealStyle } = useReveal(0);
@@ -317,23 +324,43 @@ const Nav = () => {
   return (
     <header ref={ref} style={{
       position: 'sticky', top: 0, zIndex: 50,
-      background: scrolled ? 'rgba(1, 9, 22, 0.82)' : 'transparent',
+      background: scrolled ? 'rgba(1, 9, 22, 0.88)' : 'transparent',
       backdropFilter: scrolled ? 'blur(20px) saturate(140%)' : 'none',
+      borderBottom: scrolled ? '1px solid rgba(235, 240, 231, 0.07)' : '1px solid transparent',
       ...revealStyle,
       transition: revealStyle.transition
-        ? `${revealStyle.transition}, ${navBgTransition}`
-        : navBgTransition,
+        ? `${revealStyle.transition}, ${navBgTransition}, border-color 220ms ease-out`
+        : `${navBgTransition}, border-color 220ms ease-out`,
     }}>
       <div style={{
         maxWidth: CONTENT_MAX,
         margin: '0 auto',
-        padding: '16px 32px',
+        padding: '14px 32px',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: 64,
+        justifyContent: 'space-between',
+        gap: 20,
+        flexWrap: 'wrap',
+        minHeight: 56,
       }}>
-        <Logo wordmark={false} size={48} motion={false} />
+        <a href="#" style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none', color: 'inherit' }} aria-label="Vmax home">
+          <Logo wordmark size={44} motion />
+        </a>
+        <nav style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 2,
+          flex: '1 1 260px',
+          minWidth: 0,
+        }} aria-label="Sections">
+          {NAV_ITEMS.map(({ href, label }) => (
+            <a key={href} href={href} className="vmax-nav-link">{label}</a>
+          ))}
+        </nav>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <Btn as="a" href="#cta" variant="secondary" size="sm">Get the beta</Btn>
+        </div>
       </div>
     </header>
   );
@@ -429,6 +456,7 @@ const Hero = () => {
             letterSpacing: -3.5,
             maxWidth: 1100,
             color: T.ink,
+            ...(reduceMotion ? {} : { perspective: '960px' }),
           }}
         >
           <span className="vmax-hero-line vmax-hero-line-top" style={{ display: 'block' }}>
@@ -1277,7 +1305,7 @@ const Pricing = () => {
 const CTA = () => {
   const { ref, revealStyle } = useReveal(0);
   return (
-  <section ref={ref} style={{ padding: '120px 0', borderTop: '1px solid ' + T.hair, position: 'relative', overflow: 'hidden', ...revealStyle }}>
+  <section id="cta" ref={ref} style={{ padding: '120px 0', borderTop: '1px solid ' + T.hair, position: 'relative', overflow: 'hidden', ...revealStyle }}>
     <div style={{
       position: 'absolute', inset: 0, opacity: 0.5, pointerEvents: 'none',
       backgroundImage: `radial-gradient(circle at 50% 100%, rgba(0, 46, 120, 0.18), transparent 60%)`,
