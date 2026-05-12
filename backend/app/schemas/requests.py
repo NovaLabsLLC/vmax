@@ -59,3 +59,10 @@ class SummarizeDiffRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     diff: str = ""
+
+
+class SplitAgentsRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    prompt: str = Field(min_length=1)
+    repo_context_summary: str | None = None

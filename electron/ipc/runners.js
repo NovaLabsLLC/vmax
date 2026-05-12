@@ -97,6 +97,9 @@ function register() {
       cwd: repoPath,
       env: { ...process.env, FORCE_COLOR: "0" },
       shell: false,
+      // Close stdin so non-interactive agents see EOF immediately instead of
+      // blocking on "Reading additional input from stdin…".
+      stdio: ["ignore", "pipe", "pipe"],
     });
     runners.set(runId, child);
     child.stdout.on("data", (d) => send("exec:run:data", { stream: "stdout", chunk: d.toString() }));
@@ -135,6 +138,7 @@ function register() {
         cwd,
         env: { ...process.env, FORCE_COLOR: "0" },
         shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
       });
 
       const failSpawn = (err) => {
@@ -200,6 +204,7 @@ function register() {
         cwd,
         env: { ...process.env, FORCE_COLOR: "0" },
         shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
       });
 
       const failSpawn = (err) => {

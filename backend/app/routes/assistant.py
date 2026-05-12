@@ -21,11 +21,12 @@ from ..schemas.requests import (
     AskRequest,
     ExplainFailureRequest,
     PlanRequest,
+    SplitAgentsRequest,
     SummarizeDiffRequest,
 )
 from ..logging_setup import log_audit
 from ..schemas.responses import StructuredEnvelope
-from ..services import linear_workspaces
+from ..services import agent_splitter, linear_workspaces
 from ..services import llm_router
 from ..services.linear_client import (
     LinearClientError,
@@ -365,6 +366,38 @@ async def explain_failure(body: ExplainFailureRequest) -> StructuredEnvelope:
         screenshot_base64=body.screenshot_base64,
     )
     return StructuredEnvelope(structured=result.data, parse_warning=not result.ok)
+
+
+@router.post("/split-agents")
+async def split_agents(body: SplitAgentsRequest) -> dict[str, Any]:
+    """One prompt → 1–3 concurrent agent specs for ``exec:dispatch``.
+
+    Returns ``{ splits, parse_warning, error? }``. An empty list means the
+    splitter judged the prompt unsplittable; the caller should fall back
+    to single-agent dispatch (heuristic router).
+    """
+    result = await agent_splitter.split(
+        prompt=body.prompt,
+        repo_context_summary=body.repo_context_summary,
+    )
+    splits_payload = [
+        {"agent": s.agent, "prompt": s.prompt, "reason": s.reason}
+        for s in result.splits
+    ]
+    log_audit(
+        "split_agents",
+        ok=result.ok,
+        parse_warning=result.parse_warning,
+        prompt_chars=len(body.prompt or ""),
+        agents=",".join(s.agent for s in result.splits),
+        count=len(result.splits),
+        error=result.error or "",
+    )
+    return {
+        "splits": splits_payload,
+        "parse_warning": result.parse_warning,
+        "error": result.error,
+    }
 
 
 @router.post("/summarize-diff", response_model=StructuredEnvelope)

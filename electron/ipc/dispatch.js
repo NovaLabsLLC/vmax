@@ -109,6 +109,8 @@ function startPillAgentDispatch(repoPath, spec) {
         cwd: repoPath,
         env: { ...process.env, FORCE_COLOR: "0" },
         shell: false,
+        // Non-interactive — close stdin so Claude doesn't wait for EOF.
+        stdio: ["ignore", "pipe", "pipe"],
       });
       runners.set(runId, child);
       let stderr = "";
@@ -152,6 +154,9 @@ function startPillAgentDispatch(repoPath, spec) {
         cwd: repoPath,
         env: { ...process.env, FORCE_COLOR: "0" },
         shell: false,
+        // Non-interactive — close stdin so `codex exec` doesn't hang on
+        // "Reading additional input from stdin…".
+        stdio: ["ignore", "pipe", "pipe"],
       });
       runners.set(runId, child);
       let stderr = "";
