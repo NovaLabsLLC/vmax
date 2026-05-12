@@ -3,7 +3,8 @@
 Two surfaces live here:
 
 1. **Issue lookups and patch** — ``GET /issues/{issue_id}`` plus
-   ``PATCH /issues/{issue_id}`` (title, description, priority, workflow state).
+   ``PATCH /issues/{issue_id}`` (title, description, priority, due date,
+   workflow state).
 
 2. **Create + team pick** — ``POST /issues`` creates an ``issueCreate`` row;
    ``GET /teams`` lists team ids/keys scoped to one connected workspace when
@@ -204,6 +205,13 @@ class LinearIssuePatchBody(BaseModel):
         description="Concatenates after existing description (exclusive with full replace).",
     )
     priority: int | None = Field(default=None, ge=0, le=4)
+    due_date: str | None = Field(
+        default=None,
+        description=(
+            "Calendar due date YYYY-MM-DD only. Send explicit JSON null "
+            "(field present with null value) to clear the due date."
+        ),
+    )
 
 
 @router.patch("/issues/{issue_id}")
@@ -218,12 +226,15 @@ async def patch_linear_issue(
             detail="Use either description or description_append, not both.",
         )
 
+    due_date_was_set = "due_date" in body.model_fields_set
+
     touched = (
         body.state_target is not None,
         body.title is not None,
         body.description is not None,
         body.description_append is not None,
         body.priority is not None,
+        due_date_was_set,
     )
     if not any(touched):
         raise HTTPException(status_code=400, detail="No fields supplied to patch")
@@ -257,6 +268,8 @@ async def patch_linear_issue(
             description=kwargs.pop("description", None),
             description_append=(kwargs.pop("description_append", None)),
             priority=(kwargs.pop("priority", None)),
+            due_date=body.due_date if due_date_was_set else None,
+            due_date_was_set=due_date_was_set,
         )
     except LinearClientError as err:
         log_audit(

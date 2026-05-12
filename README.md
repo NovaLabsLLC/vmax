@@ -42,6 +42,11 @@ npm start
 - The expandable panel above the bar shows the assistant's answer; the answer is also spoken aloud.
 - Or type into the input and press **Enter** to skip voice.
 
+### Vmax Workspace (agents and Linear)
+
+- The **task** textarea in Workspace is editable: type freely, paste from Linear rows, refine after voice, then plan with the send button or **⌘↵**.
+- Under **My Tasks**, use **Edit** on any row to save **title**, **description**, or **due date** to Linear. **Done** completes the issue in Linear.
+
 ## Design notes
 
 - API keys live in the Electron main process; the renderer talks to them via IPC, so secrets never reach the web context.

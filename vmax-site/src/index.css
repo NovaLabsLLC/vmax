@@ -1,0 +1,186 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #111111;
+  color: #f5f5f7;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+body {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+}
+::selection {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+a {
+  color: inherit;
+}
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.45);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Scroll-stagger lists + cards (intersection-driven live classes). */
+.vmax-session-row {
+  transition:
+    opacity 0.52s cubic-bezier(0.2, 0.8, 0.25, 1),
+    transform 0.52s cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+.vmax-sessions:not(.vmax-sessions-live) .vmax-session-row {
+  opacity: 0;
+  transform: translateY(10px);
+}
+.vmax-sessions.vmax-sessions-live .vmax-session-row:nth-child(1) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 40ms;
+}
+.vmax-sessions.vmax-sessions-live .vmax-session-row:nth-child(2) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 120ms;
+}
+.vmax-sessions.vmax-sessions-live .vmax-session-row:nth-child(3) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 200ms;
+}
+
+.vmax-pricing-card,
+.vmax-feature-cell,
+.vmax-panel-cell {
+  transition:
+    opacity 0.55s cubic-bezier(0.2, 0.8, 0.25, 1),
+    transform 0.55s cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+.vmax-pricing-grid:not(.vmax-pricing-grid-live) .vmax-pricing-card,
+.vmax-feature-grid:not(.vmax-feature-grid-live) .vmax-feature-cell,
+.vmax-panel-grid:not(.vmax-panel-grid-live) .vmax-panel-cell {
+  opacity: 0;
+  transform: translateY(14px);
+}
+.vmax-pricing-grid.vmax-pricing-grid-live .vmax-pricing-card:nth-child(1) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 45ms;
+}
+.vmax-pricing-grid.vmax-pricing-grid-live .vmax-pricing-card:nth-child(2) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 115ms;
+}
+.vmax-pricing-grid.vmax-pricing-grid-live .vmax-pricing-card:nth-child(3) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 185ms;
+}
+
+.vmax-feature-grid.vmax-feature-grid-live .vmax-feature-cell:nth-child(1) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 40ms;
+}
+.vmax-feature-grid.vmax-feature-grid-live .vmax-feature-cell:nth-child(2) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 95ms;
+}
+.vmax-feature-grid.vmax-feature-grid-live .vmax-feature-cell:nth-child(3) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 150ms;
+}
+.vmax-feature-grid.vmax-feature-grid-live .vmax-feature-cell:nth-child(4) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 205ms;
+}
+.vmax-feature-grid.vmax-feature-grid-live .vmax-feature-cell:nth-child(5) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 260ms;
+}
+.vmax-feature-grid.vmax-feature-grid-live .vmax-feature-cell:nth-child(6) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 315ms;
+}
+
+.vmax-panel-grid.vmax-panel-grid-live .vmax-panel-cell:nth-child(1) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 40ms;
+}
+.vmax-panel-grid.vmax-panel-grid-live .vmax-panel-cell:nth-child(2) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 100ms;
+}
+.vmax-panel-grid.vmax-panel-grid-live .vmax-panel-cell:nth-child(3) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 160ms;
+}
+.vmax-panel-grid.vmax-panel-grid-live .vmax-panel-cell:nth-child(4) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 220ms;
+}
+
+@keyframes vmax-status-live {
+  0%,
+  100% {
+    opacity: 0.92;
+    text-shadow: none;
+  }
+  45% {
+    opacity: 1;
+    text-shadow: 0 0 14px rgba(127, 183, 150, 0.18);
+  }
+}
+@keyframes vmax-status-wait {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.vmax-session-running {
+  animation: vmax-status-live 2.35s ease-in-out infinite;
+}
+.vmax-session-awaiting {
+  animation: vmax-status-wait 3.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vmax-sessions .vmax-session-row,
+  .vmax-pricing-grid .vmax-pricing-card,
+  .vmax-feature-grid .vmax-feature-cell,
+  .vmax-panel-grid .vmax-panel-cell {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .vmax-session-running,
+  .vmax-session-awaiting {
+    animation: none !important;
+    text-shadow: none !important;
+  }
+}

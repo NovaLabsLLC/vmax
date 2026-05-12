@@ -258,27 +258,36 @@ export default function TaskPanel({
           ) : null}
         </div>
         <div className="text-[10px] text-white/30 text-right ml-auto">
-          Hold mic, tap to toggle, or ⌥Space
+          Type, mic, ⌥ Space, or ⌘↵ to plan when focused
         </div>
       </div>
-      {/* No text field — task comes from voice, Linear/My Tasks clicks, or other panels that call onTaskChange. */}
-      <div
-        aria-live="polite"
-        aria-label={task.trim() ? "Current task preview" : "Task empty"}
-        className={`w-full min-h-[52px] max-h-[50vh] overflow-y-auto rounded-lg border px-2.5 py-2 text-[13px] leading-relaxed
-          ${disabled ? "opacity-45 pointer-events-none" : ""}
+      {/* Editable workspace task draft (sessions persist via WorkspacePanel). */}
+      <textarea
+        value={task}
+        onChange={(e) => onTaskChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (!canSend || sending) return;
+          if (e.key === "Enter" && e.metaKey) {
+            e.preventDefault();
+            onSend();
+          }
+        }}
+        disabled={!!disabled}
+        aria-label={
+          disabled ? "Task (disabled)" : task.trim() ? "Task text" : "Task — empty draft"
+        }
+        placeholder={
+          transcribing ? "Transcribing…" : micActive ? "Listening…"
+            : "Type a task here, use the mic, or open My Tasks to load one from Linear…"
+        }
+        rows={3}
+        className={`w-full min-h-[52px] max-h-[50vh] overflow-y-auto resize-y rounded-lg border px-2.5 py-2 text-[13px] leading-relaxed
+          focus:outline-none focus-visible:ring-2 focus-visible:ring-white/[0.18] focus-visible:ring-offset-0 focus-visible:border-white/[0.16]
+          disabled:opacity-45 disabled:cursor-not-allowed
           ${task.trim()
-            ? "border-white/[0.08] bg-black/20 text-white/90 whitespace-pre-wrap break-words"
-            : "border-dashed border-white/[0.1] bg-white/[0.02] text-white/38"}`}
-      >
-        {task.trim()
-          ? task
-          : transcribing
-            ? "Transcribing…"
-            : micActive
-              ? "Listening…"
-              : "Use the mic below, or open an issue under My Tasks to load a task."}
-      </div>
+            ? "border-white/[0.08] bg-black/20 text-white/90"
+            : "border-dashed border-white/[0.1] bg-white/[0.02] text-white/38 placeholder:text-white/38"}`}
+      />
 
       {voiceError && !disabled && (
         <div className="text-[11px] text-amber-200/90 leading-snug mt-1.5 pr-[88px]" role="status">

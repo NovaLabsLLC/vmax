@@ -975,6 +975,9 @@ def workflow_state_id_for_target(states: list[dict[str, Any]], target: str) -> s
     return None
 
 
+_DUE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 async def linear_update_issue(
     issue_identifier: str,
     *,
@@ -983,6 +986,8 @@ async def linear_update_issue(
     description: str | None = None,
     description_append: str | None = None,
     priority: int | None = None,
+    due_date: str | None = None,
+    due_date_was_set: bool = False,
 ) -> dict[str, Any]:
     """Apply Linear ``issueUpdate`` using the workspace that owns the row.
 
@@ -1014,6 +1019,18 @@ async def linear_update_issue(
     if priority is not None:
         blobs["priority"] = int(priority)
 
+    if due_date_was_set:
+        if due_date is None or not str(due_date).strip():
+            blobs["dueDate"] = None
+        else:
+            d_raw = str(due_date).strip()
+            day = d_raw[:10] if len(d_raw) >= 10 else d_raw
+            if not _DUE_DATE_RE.match(day):
+                raise LinearClientError(
+                    "due_date must be YYYY-MM-DD, or omit / send null to clear.",
+                )
+            blobs["dueDate"] = f"{day}T12:00:00Z"
+
     team = issue.get("team") or {}
     team_id = team.get("id")
     inner: dict[str, Any] = dict(blobs)
@@ -1034,7 +1051,7 @@ async def linear_update_issue(
     if not inner:
         raise LinearClientError(
             "No updates requested — supply state, title, description, append, "
-            "or priority.",
+            "priority, or due_date.",
         )
 
     issue_uuid = issue.get("id")

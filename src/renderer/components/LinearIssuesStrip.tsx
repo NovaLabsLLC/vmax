@@ -10,7 +10,7 @@ import { formatLinearIssueAsWorkspaceTask } from "../utils/formatLinearTaskPaylo
 import { fetchLinearIssueAgentBrief } from "../utils/linearAgentBrief";
 import { listLinearWorkspaces, type LinearWorkspace } from "../utils/linearWorkspacesApi";
 import { createLinearIssue, fetchLinearTeams, type LinearTeamOption } from "../utils/linearIssueCreate";
-import { moveLinearIssueToDone } from "../utils/linearIssuePatch";
+import { patchLinearIssue, moveLinearIssueToDone } from "../utils/linearIssuePatch";
 
 type Props = {
   say: (text: string, tone?: Bubble["tone"]) => void;
@@ -46,6 +46,14 @@ function writeStoredExpanded(on: boolean) {
   } catch {
     /* ignore */
   }
+}
+
+/** Linear ISO timestamps often include time; `<input type="date">` needs YYYY-MM-DD. */
+function linearDueToInputValue(iso?: string | null): string {
+  if (!iso) return "";
+  const s = String(iso).trim();
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : "";
 }
 
 /**
@@ -90,11 +98,25 @@ export default function LinearIssuesStrip({
   /** Wall/perf timestamp when agent-brief request started (`null` when idle). */
   const briefStartRef = useRef<number | null>(null);
   const createTitleInputRef = useRef<HTMLInputElement | null>(null);
+  /** Edit existing issue (`null` when dialog closed). */
+  const [editTarget, setEditTarget] = useState<LinearIssueRow | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+  const [editDue, setEditDue] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const editTitleInputRef = useRef<HTMLInputElement | null>(null);
 
   const closeCreateModal = useCallback(() => {
     if (createBusy) return;
     setCreateOpen(false);
   }, [createBusy]);
+
+  const closeEditModal = useCallback(() => {
+    if (editBusy) return;
+    setEditTarget(null);
+    setEditError(null);
+  }, [editBusy]);
 
   const toggleExpanded = useCallback(() => {
     setExpanded((prev) => {
@@ -176,6 +198,53 @@ export default function LinearIssuesStrip({
     [say, loadAll],
   );
 
+  const beginEditIssue = useCallback((row: LinearIssueRow) => {
+    setEditError(null);
+    setEditTitle((row.title || "").trim());
+    setEditDesc(`${row.description ?? ""}`.trim());
+    setEditDue(linearDueToInputValue(row.dueDate));
+    setEditTarget(row);
+  }, []);
+
+  const submitEditIssue = useCallback(async () => {
+    const row = editTarget;
+    const identRaw = `${row?.identifier ?? ""}`.trim();
+    if (!row || !identRaw || identRaw === "?") {
+      say("This issue can't be edited (missing Linear identifier).", "warn");
+      return;
+    }
+    const title = editTitle.trim();
+    if (!title) {
+      setEditError("Title is required.");
+      say("Linear issues need a non-empty title.", "warn");
+      return;
+    }
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      const initialDue = linearDueToInputValue(row.dueDate);
+      const dueTrim = editDue.trim();
+      const patch: Parameters<typeof patchLinearIssue>[1] = {
+        title,
+        description: editDesc.trim() || "",
+      };
+      if (dueTrim !== initialDue) {
+        patch.due_date = dueTrim ? dueTrim : null;
+      }
+      await patchLinearIssue(identRaw, patch);
+      say(`Updated ${identRaw} in Linear.`, "success");
+      await loadAll({ silent: true });
+      setEditTarget(null);
+      setEditError(null);
+    } catch (e) {
+      const msg = String((e as Error)?.message || e);
+      setEditError(msg);
+      say(msg, "warn");
+    } finally {
+      setEditBusy(false);
+    }
+  }, [editDesc, editDue, editTarget, editTitle, loadAll, say]);
+
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
@@ -234,6 +303,21 @@ export default function LinearIssuesStrip({
     const id = window.setTimeout(() => createTitleInputRef.current?.focus(), 80);
     return () => window.clearTimeout(id);
   }, [createOpen]);
+
+  useEffect(() => {
+    if (!editTarget) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeEditModal();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editTarget, closeEditModal]);
+
+  useEffect(() => {
+    if (!editTarget) return;
+    const id = window.setTimeout(() => editTitleInputRef.current?.focus(), 80);
+    return () => window.clearTimeout(id);
+  }, [editTarget]);
 
   /** Per-workspace counts for filter chips — backend `meta` when multi-workspace, else derived from rows. */
   const filterBuckets: WsBucket[] = useMemo(() => {
@@ -500,6 +584,126 @@ export default function LinearIssuesStrip({
       document.body,
     );
 
+  const editModal =
+    editTarget &&
+    typeof document !== "undefined" &&
+    createPortal(
+      <div
+        className="fixed inset-0 z-[1000] flex items-center justify-center p-4 sm:p-6"
+        role="presentation"
+      >
+        <button
+          type="button"
+          aria-label="Close edit dialog backdrop"
+          disabled={editBusy}
+          className={`absolute inset-0 bg-black/[0.55] backdrop-blur-[2px] ${editBusy ? "cursor-default" : "cursor-pointer"}`}
+          onClick={() => closeEditModal()}
+        />
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="linear-edit-issue-heading"
+          className="relative z-[1001] w-full max-w-lg max-h-[min(90vh,40rem)] overflow-y-auto rounded-2xl border border-white/[0.12]
+                     bg-[#0e0e12]/95 shadow-[0_24px_80px_-24px_rgba(0,0,0,0.85)] p-4 sm:p-5 space-y-3"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <h2
+                id="linear-edit-issue-heading"
+                className="text-[13px] font-semibold tracking-tight text-white/92"
+              >
+                Edit Linear task · {`${editTarget.identifier ?? "?"}`.trim()}
+              </h2>
+              <p className="text-[11px] text-white/45 mt-0.5 leading-snug">
+                Saves to Linear immediately. Clearing the due date removes it from the issue. ESC to cancel.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={editBusy}
+              aria-label="Close dialog"
+              onClick={() => closeEditModal()}
+              className="shrink-0 rounded-lg border border-white/[0.12] bg-white/[0.06] hover:bg-white/[0.11]
+                         text-white/75 hover:text-white w-8 h-8 flex items-center justify-center text-[16px]
+                         leading-none disabled:opacity-40 disabled:pointer-events-none"
+            >
+              ×
+            </button>
+          </div>
+
+          {editError ? (
+            <p className="text-[11px] text-rose-200/95 leading-snug">{editError}</p>
+          ) : null}
+
+          <label className="block space-y-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
+              Title <span className="text-red-300/85">*</span>
+            </span>
+            <input
+              ref={editTitleInputRef}
+              type="text"
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+              placeholder="Issue title"
+              disabled={editBusy}
+              maxLength={512}
+              className="w-full text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white placeholder:text-white/35"
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
+              Description{" "}
+              <span className="font-normal text-white/32">optional</span>
+            </span>
+            <textarea
+              value={editDesc}
+              onChange={(e) => setEditDesc(e.target.value)}
+              placeholder="Markdown or plain text"
+              disabled={editBusy}
+              rows={4}
+              className="w-full resize-y min-h-[4rem] text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white placeholder:text-white/35 mono"
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
+              Due date <span className="font-normal text-white/32">optional</span>
+            </span>
+            <input
+              type="date"
+              value={editDue}
+              onChange={(e) => setEditDue(e.target.value)}
+              disabled={editBusy}
+              className="w-full text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white/88 mono"
+            />
+            <span className="text-[10px] text-white/35 leading-snug">
+              Clear the picker (empty value) before saving to remove an existing Linear due date.
+            </span>
+          </label>
+
+          <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-white/[0.06]">
+            <button
+              type="button"
+              disabled={editBusy || !editTitle.trim()}
+              onClick={() => void submitEditIssue()}
+              className="text-[11px] px-3 h-[28px] rounded-md bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/35 text-emerald-100 disabled:opacity-45 disabled:pointer-events-none"
+            >
+              {editBusy ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              disabled={editBusy}
+              onClick={() => closeEditModal()}
+              className="text-[11px] px-3 h-[28px] rounded-md bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.1] text-white/75 disabled:opacity-35"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+
   return (
     <>
       <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-3 space-y-2 w-full">
@@ -511,8 +715,8 @@ export default function LinearIssuesStrip({
           {expanded ? (
             <span className="text-[10px] sm:text-[10.5px] text-white/40 leading-snug">
               {typeof onBriefReadySendToCursor === "function"
-                ? "Click a row → agent brief (LLM) → Cursor. Use Done on the right to complete in Linear."
-                : "Issues from connected orgs in Settings. Done on the right completes in Linear; click the row for the brief."}
+                ? "Click a row for agent brief, Edit for Linear fields (title · description · due), Done to complete."
+                : "Issues from connected orgs in Settings. Edit updates title/description/due; Done completes in Linear."}
             </span>
           ) : (
             <span className="text-[10px] text-white/38">
@@ -705,7 +909,26 @@ export default function LinearIssuesStrip({
                 </button>
                 <button
                   type="button"
-                  aria-label={canMarkDone ? `Mark ${identRaw} done in Linear` : "Issue has no Linear id"}
+                  aria-label={canMarkDone ? `Edit ${identRaw}` : "Issue has no Linear id"}
+                  title={canMarkDone ? "Edit title, description, due date" : "No Linear id"}
+                  disabled={rowBusyBrief || editBusy || markDoneKey === key || !canMarkDone}
+                  className="
+                    shrink-0 h-8 px-2.5 rounded-md
+                    border border-white/[0.08] bg-black/28
+                    text-white/72 text-[10px] font-semibold uppercase tracking-[0.08em]
+                    transition-[color,background-color,border-color,transform] duration-150 ease-out
+                    hover:border-violet-400/35 hover:bg-violet-500/[0.12] hover:text-violet-100
+                    disabled:opacity-28 disabled:pointer-events-none active:scale-[0.96]
+                  "
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    beginEditIssue(row);
+                  }}
+                >
+                  Edit
+                </button>
+                <button
                   title={canMarkDone ? `Mark ${identRaw} done` : "No Linear id"}
                   disabled={rowBusyBrief || markDoneKey === key || !canMarkDone}
                   className="
@@ -749,6 +972,7 @@ export default function LinearIssuesStrip({
       )}
       </div>
       {createModal}
+      {editModal}
     </>
   );
 }
