@@ -28,6 +28,13 @@ async function syncOverlayShellBounds(width: number, height: number, animate: bo
 /** Must match `OVERLAY_PUCK_MIN` in electron/windows.js; outer drag frame size (see Puck). */
 const OVERLAY_PUCK_PX = 80;
 
+/** Bar → puck slide; keep in sync with CSS transition on the collapsing layer */
+const MINIMIZE_TRANSITION_MS = 320;
+
+function prefersOverlayReducedMotion(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 // Floating bar + expandable Vmax response (macOS vibrancy glass).
 export default function OverlayApp() {
   const voice = useVoiceCapture();
@@ -58,6 +65,13 @@ export default function OverlayApp() {
   const [minimized, setMinimized] = useState(false);
   const minimizedRef = useRef(false);
   minimizedRef.current = minimized;
+  const shellRef = useRef<HTMLDivElement | null>(null);
+
+  /** True while the toolbar is animating into the puck (minimize only). */
+  const [minimizeLeaving, setMinimizeLeaving] = useState(false);
+  /** After layout, flip so the puck layer can transition from hidden → visible. */
+  const [puckReveal, setPuckReveal] = useState(false);
+
   /** Multiple concurrent exec:dispatch agents all emit running → done/error; track depth. */
   const dispatchBusyDepthRef = useRef(0);
 
@@ -279,23 +293,37 @@ export default function OverlayApp() {
     }
   }, [minimized]);
 
-  /** After minimize/restore, force one layout pass so RO doesn’t apply a stale wide measure. */
+  /** After minimize, size the native window from the puck shell (measured). */
   useLayoutEffect(() => {
     if (!minimized) return;
     const id = requestAnimationFrame(() => {
-      void syncOverlayShellBounds(OVERLAY_PUCK_PX, OVERLAY_PUCK_PX, false);
+      const shell = shellRef.current;
+      if (!shell) return;
+      const rect = shell.getBoundingClientRect();
+      const w = Math.ceil(Math.max(rect.width, shell.scrollWidth));
+      const h = Math.ceil(Math.max(rect.height, shell.scrollHeight));
+      if (w > 0 && h > 0) void syncOverlayShellBounds(w, h, false);
     });
     return () => cancelAnimationFrame(id);
   }, [minimized]);
 
   /** Native window tracks shell height (toolbar + optional chat + Vmax body). */
-  const shellRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     const el = shellRef.current;
     if (!el) return;
     let t: ReturnType<typeof setTimeout> | undefined;
     const apply = () => {
       if (minimizedRef.current) {
+        const shell = shellRef.current;
+        if (shell) {
+          const rect = shell.getBoundingClientRect();
+          const w = Math.ceil(Math.max(rect.width, shell.scrollWidth));
+          const h = Math.ceil(Math.max(rect.height, shell.scrollHeight));
+          if (w > 0 && h > 0) {
+            void syncOverlayShellBounds(w, h, false);
+            return;
+          }
+        }
         void syncOverlayShellBounds(OVERLAY_PUCK_PX, OVERLAY_PUCK_PX, false);
         return;
       }
@@ -318,6 +346,35 @@ export default function OverlayApp() {
     };
   }, []);
 
+  const beginMinimize = () => {
+    if (prefersOverlayReducedMotion()) {
+      setMinimized(true);
+      return;
+    }
+    if (minimizeLeaving) return;
+    setPuckReveal(false);
+    setMinimizeLeaving(true);
+  };
+
+  useLayoutEffect(() => {
+    if (!minimizeLeaving) return;
+    setPuckReveal(false);
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => setPuckReveal(true));
+    });
+    return () => cancelAnimationFrame(id);
+  }, [minimizeLeaving]);
+
+  useEffect(() => {
+    if (!minimizeLeaving) return;
+    const id = window.setTimeout(() => {
+      setMinimized(true);
+      setMinimizeLeaving(false);
+      setPuckReveal(false);
+    }, MINIMIZE_TRANSITION_MS);
+    return () => window.clearTimeout(id);
+  }, [minimizeLeaving]);
+
   return (
     <div
       className={`h-full w-max max-w-[100vw] flex flex-col overflow-x-visible overflow-y-hidden select-none
@@ -325,12 +382,16 @@ export default function OverlayApp() {
     >
       <div
         ref={shellRef}
-        className="flex flex-col shrink-0 w-max min-h-0 min-w-0"
+        className="grid [grid-template-areas:stack] shrink-0 w-max min-h-0 min-w-0"
       >
-      {minimized ? (
-        <Puck onRestore={() => setMinimized(false)} />
-      ) : (
-      <>
+      {(!minimized || minimizeLeaving) && (
+      <div
+        className={`[grid-area:stack] col-start-1 row-start-1 row-end-[-1] w-max flex flex-col min-h-0 transition-all ease-out motion-reduce:!transition-none duration-[320ms] ${
+          minimizeLeaving
+            ? "translate-x-9 opacity-0 scale-[0.96] pointer-events-none [transition-timing-function:cubic-bezier(0.25,0.82,0.25,1)]"
+            : "translate-x-0 opacity-100 scale-100 [transition-timing-function:cubic-bezier(0.25,0.82,0.25,1)]"
+        }`}
+      >
       <div
         className="shrink-0 flex flex-nowrap w-max box-border items-center gap-3 px-3 py-2 min-h-[56px]"
       >
@@ -405,7 +466,7 @@ export default function OverlayApp() {
 
         <PillButton
           title="Minimize to puck"
-          onClick={() => setMinimized(true)}
+          onClick={beginMinimize}
           state="idle"
           activeBg="bg-white text-black"
         >
@@ -504,7 +565,18 @@ export default function OverlayApp() {
         ) : null}
 
       </div>
-      </>
+      </div>
+      )}
+      {(minimized || minimizeLeaving) && (
+        <div
+          className={`[grid-area:stack] col-start-1 row-start-1 self-start z-30 flex h-[80px] w-[80px] items-center transition-all ease-out motion-reduce:!transition-none duration-[320ms] ${
+            minimizeLeaving && !puckReveal
+              ? "opacity-0 -translate-x-3 scale-[0.88] [transition-timing-function:cubic-bezier(0.25,0.82,0.25,1)]"
+              : "opacity-100 translate-x-0 scale-100 [transition-timing-function:cubic-bezier(0.25,0.82,0.25,1)]"
+          }`}
+        >
+          <Puck onRestore={() => setMinimized(false)} />
+        </div>
       )}
       </div>
     </div>
@@ -604,18 +676,18 @@ function MinimizeIcon() {
   );
 }
 
-/** Minimized: large drag ring (no-drag button = logo size only; rest is -webkit-app-region: drag). */
+/** Minimized: fixed-size puck; native window size follows shell (see ResizeObserver). Logo tap restores. */
 function Puck({ onRestore }: { onRestore: () => void }) {
   return (
     <div
-      className="drag flex h-[80px] w-[80px] cursor-grab active:cursor-grabbing items-center justify-center rounded-full bg-transparent"
+      className="drag flex h-[80px] w-[80px] shrink-0 cursor-grab active:cursor-grabbing items-center justify-center overflow-hidden rounded-full bg-transparent"
       title="Drag outside the logo to move · Tap the logo to restore"
     >
       <button
         type="button"
         onClick={onRestore}
-        title="Restore Vmax"
-        className="no-drag relative flex h-10 w-10 items-center justify-center rounded-full border-0 bg-transparent p-0 shadow-none outline-none
+        title="Restore toolbar"
+        className="no-drag relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-0 bg-transparent p-0 shadow-none outline-none
                    transition-transform active:scale-95"
       >
         <img
