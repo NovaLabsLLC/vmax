@@ -9,9 +9,38 @@
     "dev": "concurrently -k -n RENDERER,ELECTRON -c blue,magenta \"npm:dev:renderer\" \"npm:dev:electron\"",
     "build:renderer": "vite build",
     "build": "npm run build:renderer",
+    "dist": "npm run build:renderer && electron-builder --mac --arm64",
     "test": "node electron/utils/agentIntent.js && node utils/pillPromptSplit.js",
     "prestart": "npm run build",
     "start": "cross-env NODE_ENV=production node scripts/run-electron.cjs"
+  },
+  "build": {
+    "appId": "com.novalabs.vmax",
+    "productName": "Vmax",
+    "asar": true,
+    "directories": {
+      "output": "dist/installers",
+      "buildResources": "electron/assets"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/renderer/**/*",
+      "utils/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": {
+        "target": "dmg",
+        "arch": ["arm64"]
+      },
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "identity": null
+    },
+    "dmg": {
+      "writeUpdateInfo": false
+    }
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -27,6 +56,7 @@
     "concurrently": "^9.0.1",
     "cross-env": "^7.0.3",
     "electron": "^33.0.2",
+    "electron-builder": "^26.8.1",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3",

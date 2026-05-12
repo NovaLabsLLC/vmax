@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Built installers — 96 MB DMG would bust git push limits; host elsewhere.
+public/downloads/*.dmg
+public/downloads/*.zip
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
