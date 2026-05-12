@@ -179,6 +179,7 @@ const Tag = ({ children, tone = 'neutral', mono = true, style }) => {
     neutral: { color: T.inkDim, border: T.hair, bg: 'transparent' },
     pos:     { color: T.accent, border: 'rgba(0, 46, 120, 0.35)', bg: 'rgba(0, 46, 120, 0.1)' },
     ink:     { color: T.ink, border: T.hairStrong, bg: T.cardHi },
+    light:   { color: T.ink, border: 'rgba(235, 240, 231, 0.38)', bg: 'transparent' },
   }[tone];
   return (
     <span style={{
@@ -488,7 +489,7 @@ const Hero = () => {
               <Mono style={{ marginLeft: 8 }}>vmax · workspace · exec/main · 25 changed</Mono>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
                 <Tag>⌘ K</Tag>
-                <Tag tone="pos">●  recording</Tag>
+                <Tag tone="light">●  recording</Tag>
               </div>
             </div>
 
@@ -739,7 +740,7 @@ const Hero = () => {
                     <span style={{ textTransform: 'uppercase' }}>recap · </span>
                     <span style={{ textTransform: 'none' }}>ClaudeCodex_Run4823</span>
                   </Mono>
-                  <Tag tone="pos">passed</Tag>
+                  <Tag tone="light">passed</Tag>
                 </div>
                 <div style={{ fontFamily: T.mono, fontSize: fz(11.5), lineHeight: 1.65, color: T.inkDim, flex: 1 }}>
                   <div style={{ color: T.inkMute }}># intent</div>
@@ -1246,7 +1247,7 @@ const Pricing = () => {
             position: 'relative',
           }}>
             {p.featured && (
-              <div style={{ position: 'absolute', top: 14, right: 14 }}><Tag tone="pos">popular</Tag></div>
+              <div style={{ position: 'absolute', top: 14, right: 14 }}><Tag tone="light">popular</Tag></div>
             )}
             <div>
               <Mono style={{ color: T.inkMute, textTransform: 'uppercase' }}>{p.name}</Mono>
