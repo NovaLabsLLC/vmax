@@ -20,7 +20,7 @@ const {
   clampOverlayContentHeight,
   clampOverlayContentWidth,
   PILL_HEIGHT,
-  PILL_WIDTH_MIN,
+  PILL_WIDTH_DEFAULT,
   OVERLAY_EXPANDED_HEIGHT,
 } = require("./windows.js");
 
@@ -110,8 +110,14 @@ function register() {
   ipcMain.handle("overlay:set-bounds", (_evt, payload) => {
     const overlayWindow = getOverlayWindow();
     if (!overlayWindow || overlayWindow.isDestroyed()) return false;
-    const w = Number(payload?.width) || PILL_WIDTH_MIN;
-    const h = Number(payload?.height) || PILL_HEIGHT;
+    const wIn = Number(payload?.width);
+    const hIn = Number(payload?.height);
+    const w = clampOverlayContentWidth(
+      Number.isFinite(wIn) && wIn > 0 ? wIn : PILL_WIDTH_DEFAULT,
+    );
+    const h = clampOverlayContentHeight(
+      Number.isFinite(hIn) && hIn > 0 ? hIn : PILL_HEIGHT,
+    );
     if (payload?.animate) animateOverlayBounds(w, h);
     else snapOverlayBounds(w, h);
     return true;

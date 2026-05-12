@@ -203,26 +203,90 @@ a:focus-visible {
 
 /* Nav mark: keep PNG visible on #010916 (many assets read dark). */
 .vmax-nav-logo {
-  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.25, 1);
-  transform-origin: left center;
-}
-.vmax-nav-logo--scrolled {
-  transform: scale(0.94);
-}
-@media (max-width: 720px) {
-  .vmax-nav-logo {
-    transform-origin: center center;
-  }
+  transform-origin: center center;
 }
 .vmax-nav-logo img {
   filter: brightness(1.35) contrast(1.08);
 }
 
+/* One duration + easing for logo row; vars live on inner so marks/wordmark agree */
+.vmax-nav-logo-inner {
+  --vmax-nav-logo-dur: 0.22s;
+  --vmax-nav-logo-ease: cubic-bezier(0.25, 0.82, 0.25, 1);
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  gap: 5px;
+  /* gap follows data attribute (no tween) — avoids fighting max-width */
+  transition: gap 0s;
+}
+.vmax-nav-logo-inner[data-wordmark-open='false'] {
+  gap: 0;
+}
+
+.vmax-nav-logo-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-shrink: 0;
+  line-height: 0;
+  transition:
+    height var(--vmax-nav-logo-dur) var(--vmax-nav-logo-ease),
+    max-height var(--vmax-nav-logo-dur) var(--vmax-nav-logo-ease);
+}
+.vmax-nav-logo-mark img {
+  width: auto;
+  object-fit: contain;
+  display: block;
+  transition:
+    height var(--vmax-nav-logo-dur) var(--vmax-nav-logo-ease),
+    max-height var(--vmax-nav-logo-dur) var(--vmax-nav-logo-ease),
+    max-width var(--vmax-nav-logo-dur) var(--vmax-nav-logo-ease);
+}
+
+/* min-width:0 + flex-shrink:1 — flex default min-width:auto was blocking collapse (words “stuck”) */
+.vmax-nav-logo-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  max-width: 260px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  opacity: 1;
+  pointer-events: auto;
+  clip-path: inset(0 0 0 0);
+  transition:
+    clip-path var(--vmax-nav-logo-dur) var(--vmax-nav-logo-ease),
+    opacity var(--vmax-nav-logo-dur) var(--vmax-nav-logo-ease),
+    max-width var(--vmax-nav-logo-dur) var(--vmax-nav-logo-ease);
+}
+
+.vmax-nav-logo-inner[data-wordmark-open='false'] .vmax-nav-logo-wordmark {
+  max-width: 0;
+  clip-path: inset(0 100% 0 0);
+  opacity: 0;
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .vmax-nav-logo,
-  .vmax-nav-logo--scrolled {
+  .vmax-nav-logo-inner,
+  .vmax-nav-logo-mark,
+  .vmax-nav-logo-mark img,
+  .vmax-nav-logo-wordmark {
     transition: none !important;
-    transform: none !important;
+  }
+
+  .vmax-nav-logo-inner[data-wordmark-open='false'] .vmax-nav-logo-wordmark {
+    clip-path: inset(0 100% 0 0);
+    visibility: hidden;
+    max-width: 0;
+    opacity: 0;
   }
 }
 
@@ -232,10 +296,19 @@ a:focus-visible {
   grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
+  transition: min-height 0.22s cubic-bezier(0.25, 0.82, 0.25, 1);
 }
 .vmax-nav-shell > nav {
   min-width: 0;
 }
+
+/* Scrolled: logo-only strip (sections + download hidden). */
+.vmax-nav-shell--scrolled {
+  grid-template-columns: 1fr;
+  justify-items: center;
+  min-height: 52px;
+}
+
 @media (max-width: 720px) {
   .vmax-nav-shell {
     grid-template-columns: 1fr;

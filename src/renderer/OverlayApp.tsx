@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import logoPuck from "./assets/logo.png";
 import OverlayMiniChat from "./components/OverlayMiniChat";
 import VmaxExpandedPanel from "./components/VmaxExpandedPanel";
 import { useVoiceCapture } from "./hooks/useVoiceCapture";
@@ -23,6 +24,9 @@ async function syncOverlayShellBounds(width: number, height: number, animate: bo
   }
   void api.setOverlayContentHeight?.(height);
 }
+
+/** Must match `OVERLAY_PUCK_MIN` in electron/windows.js; outer drag frame size (see Puck). */
+const OVERLAY_PUCK_PX = 80;
 
 // Floating bar + expandable Vmax response (macOS vibrancy glass).
 export default function OverlayApp() {
@@ -52,6 +56,8 @@ export default function OverlayApp() {
   const [dispatchError, setDispatchError] = useState<string | null>(null);
   /** Collapses the toolbar to a tiny status puck (still floating). */
   const [minimized, setMinimized] = useState(false);
+  const minimizedRef = useRef(false);
+  minimizedRef.current = minimized;
   /** Multiple concurrent exec:dispatch agents all emit running → done/error; track depth. */
   const dispatchBusyDepthRef = useRef(0);
 
@@ -264,15 +270,22 @@ export default function OverlayApp() {
     else void window.exec.setOverlayExpanded?.(false);
   }, [showVmaxBody]);
 
-  /** Animate the native window down to / up from puck size on minimize toggle.
-   *  The ResizeObserver below will lock in the final size with animate: false
-   *  once the DOM settles; this just makes the transition feel intentional. */
+  /** Shrink the native window to puck size (no tween) so vibrancy never shows a wide strip. */
   useEffect(() => {
     if (minimized) {
-      void syncOverlayShellBounds(40, 40, true);
+      void syncOverlayShellBounds(OVERLAY_PUCK_PX, OVERLAY_PUCK_PX, false);
     } else {
       void syncOverlayShellBounds(400, 56, true);
     }
+  }, [minimized]);
+
+  /** After minimize/restore, force one layout pass so RO doesn’t apply a stale wide measure. */
+  useLayoutEffect(() => {
+    if (!minimized) return;
+    const id = requestAnimationFrame(() => {
+      void syncOverlayShellBounds(OVERLAY_PUCK_PX, OVERLAY_PUCK_PX, false);
+    });
+    return () => cancelAnimationFrame(id);
   }, [minimized]);
 
   /** Native window tracks shell height (toolbar + optional chat + Vmax body). */
@@ -282,6 +295,10 @@ export default function OverlayApp() {
     if (!el) return;
     let t: ReturnType<typeof setTimeout> | undefined;
     const apply = () => {
+      if (minimizedRef.current) {
+        void syncOverlayShellBounds(OVERLAY_PUCK_PX, OVERLAY_PUCK_PX, false);
+        return;
+      }
       const rect = el.getBoundingClientRect();
       const w = Math.ceil(Math.max(rect.width, el.scrollWidth));
       const h = Math.ceil(Math.max(rect.height, el.scrollHeight));
@@ -303,7 +320,7 @@ export default function OverlayApp() {
 
   return (
     <div
-      className={`h-full flex flex-col overflow-x-visible overflow-y-hidden select-none
+      className={`h-full w-max max-w-[100vw] flex flex-col overflow-x-visible overflow-y-hidden select-none
                   ${busy ? "shimmer-sweep" : ""}`}
     >
       <div
@@ -311,7 +328,7 @@ export default function OverlayApp() {
         className="flex flex-col shrink-0 w-max min-h-0 min-w-0"
       >
       {minimized ? (
-        <Puck dotTone={dotTone} onRestore={() => setMinimized(false)} />
+        <Puck onRestore={() => setMinimized(false)} />
       ) : (
       <>
       <div
@@ -587,24 +604,30 @@ function MinimizeIcon() {
   );
 }
 
-/** Minimized state: drag-region container + a single click-to-restore dot.
- *  Inner button is `no-drag` so the click is honored; outer wrapper carries
- *  the macOS drag region so users can still reposition the puck. */
-function Puck({ dotTone, onRestore }: { dotTone: string; onRestore: () => void }) {
+/** Minimized: large drag ring (no-drag button = logo size only; rest is -webkit-app-region: drag). */
+function Puck({ onRestore }: { onRestore: () => void }) {
   return (
     <div
-      className="drag w-10 h-10 flex items-center justify-center cursor-grab active:cursor-grabbing rounded-full"
-      title="Drag to move"
+      className="drag flex h-[80px] w-[80px] cursor-grab active:cursor-grabbing items-center justify-center rounded-full bg-transparent"
+      title="Drag outside the logo to move · Tap the logo to restore"
     >
       <button
         type="button"
         onClick={onRestore}
         title="Restore Vmax"
-        className="no-drag h-8 w-8 rounded-full flex items-center justify-center
-                   bg-white/[0.10] hover:bg-white/[0.20] border border-white/[0.14]
-                   transition-colors active:scale-[0.94]"
+        className="no-drag relative flex h-10 w-10 items-center justify-center rounded-full border-0 bg-transparent p-0 shadow-none outline-none
+                   transition-transform active:scale-95"
       >
-        <span className={`w-2.5 h-2.5 rounded-full ${dotTone}`} />
+        <img
+          src={logoPuck}
+          alt=""
+          className="max-h-[40px] max-w-[40px] h-auto w-auto object-contain pointer-events-none select-none"
+          style={{
+            filter: "brightness(1.22) contrast(1.08) saturate(1.05)",
+          }}
+          draggable={false}
+          decoding="async"
+        />
       </button>
     </div>
   );

@@ -69,9 +69,8 @@ function createCommandWindow({ visible = true } = {}) {
 const PILL_WIDTH_MIN = 300;
 const PILL_WIDTH_DEFAULT = 400;
 const PILL_HEIGHT = 56;
-/** Absolute floor for clamping — lets the renderer shrink to a tiny puck
- *  when minimized. Normal toolbar mode never reaches this. */
-const OVERLAY_PUCK_MIN = 36;
+/** Absolute floor for clamping — renderer shrinks the overlay to this when minimized. */
+const OVERLAY_PUCK_MIN = 80;
 /** Upper bound for overlay height (renderer asks for exact size below this). */
 const OVERLAY_EXPANDED_HEIGHT = 720;
 let overlayPillWidth = PILL_WIDTH_DEFAULT;
@@ -84,13 +83,23 @@ function clampOverlayContentWidth(w) {
   const primary = screen.getPrimaryDisplay();
   const maxByScreen = Math.max(PILL_WIDTH_MIN, primary.workAreaSize.width - 32);
   const maxW = Math.min(1100, maxByScreen);
-  return Math.max(OVERLAY_PUCK_MIN, Math.min(maxW, Math.ceil(Number(w) || PILL_WIDTH_MIN)));
+  const raw = Number(w);
+  const n = Math.ceil(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    return Math.min(maxW, Math.max(OVERLAY_PUCK_MIN, PILL_WIDTH_DEFAULT));
+  }
+  return Math.max(OVERLAY_PUCK_MIN, Math.min(maxW, n));
 }
 
 function clampOverlayContentHeight(h) {
   const minH = OVERLAY_PUCK_MIN;
   const maxH = OVERLAY_EXPANDED_HEIGHT;
-  return Math.max(minH, Math.min(maxH, Math.ceil(Number(h) || PILL_HEIGHT)));
+  const raw = Number(h);
+  const n = Math.ceil(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    return Math.min(maxH, Math.max(minH, PILL_HEIGHT));
+  }
+  return Math.max(minH, Math.min(maxH, n));
 }
 
 /** Keep the bottom edge fixed; horizontal center preserved when width changes. */
