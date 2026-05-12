@@ -20,8 +20,10 @@ function macDownloadBtnProps(url) {
   };
 }
 
-/** Scroll-triggered fade + lift; skips motion when `prefers-reduced-motion`. */
-function useReveal(delayMs = 0) {
+/** Scroll-triggered fade + optional lift; skips motion when `prefers-reduced-motion`.
+ *  Use `{ lift: false }` for sticky nav so the bar fades in without sliding the logo. */
+function useReveal(delayMs = 0, opts = {}) {
+  const { lift = true } = opts;
   const ref = useRef(null);
   const [visible, setVisible] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(() => prefersReducedMotion());
@@ -51,12 +53,17 @@ function useReveal(delayMs = 0) {
 
   const revealStyle = reduceMotion
     ? {}
-    : {
-        opacity: visible ? 1 : 0,
-        transform: visible ? 'translateY(0)' : 'translateY(18px)',
-        transition:
-          `opacity 0.7s cubic-bezier(0.2, 0.8, 0.25, 1) ${delayMs}ms, transform 0.7s cubic-bezier(0.2, 0.8, 0.25, 1) ${delayMs}ms`,
-      };
+    : lift
+      ? {
+          opacity: visible ? 1 : 0,
+          transform: visible ? 'translateY(0)' : 'translateY(18px)',
+          transition:
+            `opacity 0.7s cubic-bezier(0.2, 0.8, 0.25, 1) ${delayMs}ms, transform 0.7s cubic-bezier(0.2, 0.8, 0.25, 1) ${delayMs}ms`,
+        }
+      : {
+          opacity: visible ? 1 : 0,
+          transition: `opacity 0.7s cubic-bezier(0.2, 0.8, 0.25, 1) ${delayMs}ms`,
+        };
 
   return { ref, revealStyle, visible, reduceMotion };
 }
@@ -301,6 +308,50 @@ const Logo = ({ size = 44, wordmark = true, motion = true }) => {
   );
 };
 
+/** Apple mark (decorative) for macOS download badges — not the Apple Inc. trademark artwork. */
+function AppleMark({ size = 22, color = T.ink }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden style={{ display: 'block', flexShrink: 0 }}>
+      <path
+        fill={color}
+        d="M17.05 20.28c-.98.95-2.05.88-3.08.35-1.09-.48-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.3 4.52-3.74 4.25z"
+      />
+    </svg>
+  );
+}
+
+/** Nav-sized macOS download chip (Apple-style: logo + two-line label). */
+function NavMacDownloadBadge() {
+  const raw = macDownloadBtnProps(MAC_DOWNLOAD_URL);
+  const hasFile = !!MAC_DOWNLOAD_URL;
+  const { as: _omitAs, ...anchorProps } = raw;
+  const common = {
+    className: 'vmax-nav-mac-badge',
+    style: { WebkitFontSmoothing: 'antialiased' },
+  };
+  const label = (
+    <>
+      <AppleMark size={26} color={T.ink} />
+      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: 1.12, gap: 1 }}>
+        <span style={{ fontFamily: T.sans, fontSize: fz(10), fontWeight: 500, color: T.inkMute, letterSpacing: 0.06 }}>Download on the</span>
+        <span style={{ fontFamily: T.sans, fontSize: fz(12.5), fontWeight: 600, color: T.ink, letterSpacing: -0.2 }}>Mac App Store</span>
+      </span>
+    </>
+  );
+  if (hasFile) {
+    return (
+      <a {...anchorProps} {...common} aria-label="Download Vmax for macOS">
+        {label}
+      </a>
+    );
+  }
+  return (
+    <a href="#cta" {...common} aria-label="Download Vmax for macOS">
+      {label}
+    </a>
+  );
+}
+
 // ---------------- Nav ----------------
 const NAV_ITEMS = [
   { href: '#product', label: 'Product' },
@@ -311,7 +362,7 @@ const NAV_ITEMS = [
 
 const Nav = () => {
   const [scrolled, setScrolled] = useState(false);
-  const { ref, revealStyle } = useReveal(0);
+  const { ref, revealStyle } = useReveal(0, { lift: false });
 
   useEffect(() => {
     const onS = () => setScrolled(window.scrollY > 8);
@@ -332,18 +383,13 @@ const Nav = () => {
         ? `${revealStyle.transition}, ${navBgTransition}, border-color 220ms ease-out`
         : `${navBgTransition}, border-color 220ms ease-out`,
     }}>
-      <div style={{
+      <div className="vmax-nav-shell" style={{
         maxWidth: CONTENT_MAX,
         margin: '0 auto',
         padding: '14px 32px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 20,
-        flexWrap: 'wrap',
         minHeight: 56,
       }}>
-        <a href="#" style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none', color: 'inherit' }} aria-label="Vmax home">
+        <a href="#" className={'vmax-nav-logo' + (scrolled ? ' vmax-nav-logo--scrolled' : '')} style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none', color: 'inherit', minWidth: 0 }} aria-label="Vmax home">
           <Logo wordmark size={44} motion />
         </a>
         <nav style={{
@@ -351,15 +397,16 @@ const Nav = () => {
           alignItems: 'center',
           justifyContent: 'center',
           gap: 2,
-          flex: '1 1 260px',
           minWidth: 0,
+          flexWrap: 'wrap',
+          justifySelf: 'stretch',
         }} aria-label="Sections">
           {NAV_ITEMS.map(({ href, label }) => (
             <a key={href} href={href} className="vmax-nav-link">{label}</a>
           ))}
         </nav>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-          <Btn as="a" href="#cta" variant="secondary" size="sm">Get the beta</Btn>
+        <div className="vmax-nav-download-wrap" style={{ display: 'flex', alignItems: 'center', gap: 10, justifySelf: 'end', flexShrink: 0 }}>
+          <NavMacDownloadBadge />
         </div>
       </div>
     </header>
@@ -427,7 +474,7 @@ const Hero = () => {
     { x: 80, y: 180, label: 'Cursor', sub: 'editor bridge', color: T.violet },
   ]), []);
   return (
-    <div ref={heroRevealRef} style={{ position: 'relative', padding: '100px 0 0', overflow: 'visible', ...heroRevealStyle }}>
+    <div ref={heroRevealRef} style={{ position: 'relative', padding: '108px 0 0', overflow: 'visible', ...heroRevealStyle }}>
       {/* faint grid */}
       <div style={{
         position: 'absolute', inset: 0, opacity: 0.6, pointerEvents: 'none',
@@ -452,11 +499,10 @@ const Hero = () => {
             fontFamily: T.sans,
             fontWeight: 500,
             fontSize: fz(88),
-            lineHeight: 1.06,
+            lineHeight: 1.1,
             letterSpacing: -3.5,
             maxWidth: 1100,
             color: T.ink,
-            ...(reduceMotion ? {} : { perspective: '960px' }),
           }}
         >
           <span className="vmax-hero-line vmax-hero-line-top" style={{ display: 'block' }}>
