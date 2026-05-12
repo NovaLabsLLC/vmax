@@ -4,6 +4,7 @@ import VmaxExpandedPanel from "./components/VmaxExpandedPanel";
 import { useVoiceCapture } from "./hooks/useVoiceCapture";
 import { useScreen } from "./hooks/useScreen";
 import { subscribeSettingsUpdated } from "./utils/subscribeSettingsUpdated";
+import { splitAgentsForPrompt } from "./utils/splitAgents";
 import type { AgentStatusEvent, VmaxOverlayBroadcast, VmaxPanelPayload } from "./types";
 
 /** Resize the pill window; prefers `overlay:set-bounds`, falls back if main predates that handler. */
@@ -176,10 +177,21 @@ export default function OverlayApp() {
       const { text } = await window.exec.transcribe(result);
       const clean = (text || "").trim();
       if (!clean) return;
-      // Direct route: Vmax picks the best coding agent and fires it.
-      // Status chips update via onAgentsStatus.
+      // Fan-out: ask the backend splitter to decompose into 1–3 concurrent
+      // jobs (one per agent). If it returns ≥2, dispatch them in parallel;
+      // otherwise fall back to the heuristic single-agent router so trivial
+      // prompts don't pay the multi-agent tax.
       if (typeof window.exec.dispatch === "function") {
-        const res = await window.exec.dispatch({ prompt: clean });
+        let splits: Awaited<ReturnType<typeof splitAgentsForPrompt>> = [];
+        try {
+          splits = await splitAgentsForPrompt(clean);
+        } catch (err) {
+          console.warn("split-agents failed; falling back to single-agent dispatch", err);
+        }
+        const res =
+          splits.length >= 2
+            ? await window.exec.dispatch({ agentPrompts: splits })
+            : await window.exec.dispatch({ prompt: clean });
         if (!res?.ok && res?.error) setDispatchError(res.error);
       } else {
         await window.exec.pillVoiceQuestion(clean);
