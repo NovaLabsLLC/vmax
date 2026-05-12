@@ -50,6 +50,8 @@ export default function OverlayApp() {
   // toggle the pill's busy shimmer while a dispatch is in flight).
   const [dispatchBusy, setDispatchBusy] = useState(false);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
+  /** Collapses the toolbar to a tiny status puck (still floating). */
+  const [minimized, setMinimized] = useState(false);
   /** Multiple concurrent exec:dispatch agents all emit running → done/error; track depth. */
   const dispatchBusyDepthRef = useRef(0);
 
@@ -262,6 +264,17 @@ export default function OverlayApp() {
     else void window.exec.setOverlayExpanded?.(false);
   }, [showVmaxBody]);
 
+  /** Animate the native window down to / up from puck size on minimize toggle.
+   *  The ResizeObserver below will lock in the final size with animate: false
+   *  once the DOM settles; this just makes the transition feel intentional. */
+  useEffect(() => {
+    if (minimized) {
+      void syncOverlayShellBounds(40, 40, true);
+    } else {
+      void syncOverlayShellBounds(400, 56, true);
+    }
+  }, [minimized]);
+
   /** Native window tracks shell height (toolbar + optional chat + Vmax body). */
   const shellRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
@@ -297,6 +310,10 @@ export default function OverlayApp() {
         ref={shellRef}
         className="flex flex-col shrink-0 w-max min-h-0 min-w-0"
       >
+      {minimized ? (
+        <Puck dotTone={dotTone} onRestore={() => setMinimized(false)} />
+      ) : (
+      <>
       <div
         className="shrink-0 flex flex-nowrap w-max box-border items-center gap-3 px-3 py-2 min-h-[56px]"
       >
@@ -367,6 +384,15 @@ export default function OverlayApp() {
           activeBg="bg-white text-black"
         >
           <ExpandIcon />
+        </PillButton>
+
+        <PillButton
+          title="Minimize to puck"
+          onClick={() => setMinimized(true)}
+          state="idle"
+          activeBg="bg-white text-black"
+        >
+          <MinimizeIcon />
         </PillButton>
         </div>
 
@@ -461,6 +487,8 @@ export default function OverlayApp() {
         ) : null}
 
       </div>
+      </>
+      )}
       </div>
     </div>
   );
@@ -546,6 +574,39 @@ function ChatIcon() {
     <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
       <path d="M21 15a4 4 0 0 1-4 4H8l-5 3v-3H5a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4h12a4 4 0 0 1 4 4z" />
     </svg>
+  );
+}
+
+function MinimizeIcon() {
+  // Down-chevron in a square — reads as "collapse / put away" at 15×15.
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" {...stroke}>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M8 11l4 4 4-4" />
+    </svg>
+  );
+}
+
+/** Minimized state: drag-region container + a single click-to-restore dot.
+ *  Inner button is `no-drag` so the click is honored; outer wrapper carries
+ *  the macOS drag region so users can still reposition the puck. */
+function Puck({ dotTone, onRestore }: { dotTone: string; onRestore: () => void }) {
+  return (
+    <div
+      className="drag w-10 h-10 flex items-center justify-center cursor-grab active:cursor-grabbing rounded-full"
+      title="Drag to move"
+    >
+      <button
+        type="button"
+        onClick={onRestore}
+        title="Restore Vmax"
+        className="no-drag h-8 w-8 rounded-full flex items-center justify-center
+                   bg-white/[0.10] hover:bg-white/[0.20] border border-white/[0.14]
+                   transition-colors active:scale-[0.94]"
+      >
+        <span className={`w-2.5 h-2.5 rounded-full ${dotTone}`} />
+      </button>
+    </div>
   );
 }
 
