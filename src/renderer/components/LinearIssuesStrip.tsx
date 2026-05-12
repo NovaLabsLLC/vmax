@@ -434,7 +434,7 @@ export default function LinearIssuesStrip({
       const mimeOk = /^image\/(jpeg|png)$/i.test(file.type);
       const nameOk = /\.(jpe?g|png)$/i.test(file.name);
       if (!mimeOk && !nameOk) {
-        say("Use a JPEG or PNG image.", "warn");
+        say("Choose a JPEG or PNG screenshot.", "warn");
         return;
       }
       setImageDraftBusy(true);
@@ -444,7 +444,10 @@ export default function LinearIssuesStrip({
         const out = await draftLinearIssueFromImage(b64);
         setCreateTitle((out.title || "").slice(0, 512));
         setCreateDesc((out.description || "").slice(0, 50000));
-        say("Filled title and description from the image. Edit before creating.", "success");
+        say(
+          "AI drafted Title and Description from your screenshot. Review, pick team, then Create in Linear.",
+          "success",
+        );
       } catch (err) {
         const msg = String((err as Error)?.message || err);
         setCreateError(msg);
@@ -477,6 +480,7 @@ export default function LinearIssuesStrip({
           role="dialog"
           aria-modal="true"
           aria-labelledby="linear-add-task-heading"
+          aria-busy={imageDraftBusy}
           className="relative z-[1001] w-full max-w-lg max-h-[min(90vh,40rem)] overflow-y-auto rounded-2xl border border-white/[0.12]
                      bg-[#0e0e12]/95 shadow-[0_24px_80px_-24px_rgba(0,0,0,0.85)] p-4 sm:p-5 space-y-3"
           onMouseDown={(e) => e.stopPropagation()}
@@ -490,7 +494,9 @@ export default function LinearIssuesStrip({
                 Add Linear task
               </h2>
               <p className="text-[11px] text-white/45 mt-0.5 leading-snug">
-                Creates an issue via your Settings keys and team. ESC or backdrop to dismiss.
+                Uses your Linear workspace from Settings. Type below, or upload a screenshot and AI fills title +
+                description—you still choose team and tap Create; nothing is filed until then. ESC or backdrop to
+                dismiss.
               </p>
             </div>
             <button
@@ -541,33 +547,41 @@ export default function LinearIssuesStrip({
               type="text"
               value={createTitle}
               onChange={(e) => setCreateTitle(e.target.value)}
-              placeholder="Issue title"
+              placeholder="Short issue title (or draft from screenshot below)"
               disabled={createBusy || imageDraftBusy}
               maxLength={512}
               className="w-full text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white placeholder:text-white/35"
             />
           </label>
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              ref={createImageFileRef}
-              type="file"
-              accept="image/jpeg,image/png,.jpg,.jpeg,.png"
-              hidden
-              onChange={(e) => void onCreateImageDraftChange(e)}
-            />
-            <button
-              type="button"
-              disabled={createBusy || imageDraftBusy}
-              title="JPEG or PNG: extract title and description with the vision model"
-              onClick={() => triggerImageDraftPicker()}
-              className="text-[11px] px-3 h-[28px] rounded-md bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/35 text-violet-100
-                         disabled:opacity-45 disabled:pointer-events-none transition-colors"
-            >
-              {imageDraftBusy ? "Reading image…" : "Fill from photo"}
-            </button>
-            <span className="text-[10px] text-white/38 leading-snug">
-              Uses backend vision (OpenAI / Anthropic). Does not create the issue until you tap Create.
-            </span>
+          <div className="rounded-lg border border-violet-400/20 bg-violet-500/[0.06] p-2.5 space-y-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-violet-200/75">
+              Draft from screenshot (AI)
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                ref={createImageFileRef}
+                type="file"
+                accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+                hidden
+                onChange={(e) => void onCreateImageDraftChange(e)}
+              />
+              <button
+                type="button"
+                disabled={createBusy || imageDraftBusy}
+                title="Pick a JPEG or PNG screenshot; AI writes Title and Description for you to edit"
+                aria-describedby="linear-draft-from-image-help"
+                onClick={() => triggerImageDraftPicker()}
+                className="text-[11px] px-3 h-[28px] rounded-md bg-violet-500/25 hover:bg-violet-500/35 border border-violet-400/40 text-violet-50
+                           disabled:opacity-45 disabled:pointer-events-none transition-colors"
+              >
+                {imageDraftBusy ? "Analyzing screenshot…" : "Choose screenshot → draft fields"}
+              </button>
+            </div>
+            <p id="linear-draft-from-image-help" className="text-[10px] text-white/45 leading-snug">
+              Vision reads bugs, UI, errors, or sketches and proposes a coding-ready issue. Only fills Title +
+              Description—pick Team below, then tap <span className="text-emerald-200/90">Create in Linear</span> to file
+              it.
+            </p>
           </div>
           <label className="block space-y-1">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
@@ -577,7 +591,7 @@ export default function LinearIssuesStrip({
             <textarea
               value={createDesc}
               onChange={(e) => setCreateDesc(e.target.value)}
-              placeholder="More context…"
+              placeholder="Context, repro steps, acceptance criteria—or leave blank until AI drafts from a screenshot"
               disabled={createBusy || imageDraftBusy}
               rows={3}
               className="w-full resize-y min-h-[3.25rem] text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white placeholder:text-white/35 mono"

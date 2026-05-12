@@ -93,25 +93,77 @@ function useRevealChildren({ threshold = 0.08, rootMargin = '0px 0px -8% 0px' } 
   return { ref, live: reduceMotion || activated };
 }
 
+/** Product panel KPI / chart orchestration. */
+function usePrefersReducedMotion() {
+  const [rm, setRm] = useState(() => prefersReducedMotion());
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => setRm(mq.matches);
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+  return rm;
+}
+
+function useCountUp(endNum, active, reduceMotion, durationMs = 1400) {
+  const [v, setV] = useState(0);
+
+  useEffect(() => {
+    if (reduceMotion || !active) return undefined;
+    let raf;
+    const start = performance.now();
+    const from = 0;
+    const tick = (now) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      const eased = 1 - (1 - t) ** 3;
+      setV(from + (endNum - from) * eased);
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [endNum, active, reduceMotion, durationMs]);
+
+  if (reduceMotion) return endNum;
+  if (!active) return 0;
+  return v;
+}
+
+function formatKpiNum(n, { decimals = 0, prefix = '', suffix = '' }) {
+  const val = decimals > 0 ? n.toFixed(decimals) : String(Math.round(n));
+  return `${prefix}${val}${suffix}`;
+}
+
 // ---------------- Tokens ----------------
+/** Brand: bg #010916 · accent #002E78 · light #EBF0E7 */
 const T = {
-  bg: '#111111',
-  bgAlt: '#161616',
-  ink: '#f5f5f7',
-  inkDim: 'rgba(245,245,247,0.62)',
-  inkMute: 'rgba(245,245,247,0.42)',
-  inkFaint: 'rgba(245,245,247,0.22)',
-  hair: 'rgba(255,255,255,0.07)',
-  hairStrong: 'rgba(255,255,255,0.12)',
-  card: 'rgba(255,255,255,0.018)',
-  cardHi: 'rgba(255,255,255,0.035)',
-  green: '#7fb796',
-  greenDim: 'rgba(127,183,150,0.18)',
-  amber: '#d8b375',
-  violet: '#9b8fcf',
+  bg: '#010916',
+  bgAlt: '#0a1628',
+  ink: '#EBF0E7',
+  inkDim: 'rgba(235, 240, 231, 0.72)',
+  inkMute: 'rgba(235, 240, 231, 0.48)',
+  inkFaint: 'rgba(235, 240, 231, 0.26)',
+  hair: 'rgba(235, 240, 231, 0.08)',
+  hairStrong: 'rgba(235, 240, 231, 0.16)',
+  card: 'rgba(235, 240, 231, 0.035)',
+  cardHi: 'rgba(235, 240, 231, 0.07)',
+  accent: '#002E78',
+  accentSoft: 'rgba(0, 46, 120, 0.22)',
+  accentGlow: 'rgba(0, 46, 120, 0.45)',
+  /** Diagram / status variety (harmonized with accent + ink) */
+  green: '#5BA89A',
+  greenDim: 'rgba(91, 168, 154, 0.2)',
+  amber: '#D4B87A',
+  violet: '#4A8FD9',
   mono: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
   sans: 'Inter, -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif',
 };
+
+/** Aligned max width for nav, hero, sections, and footer rails. */
+const CONTENT_MAX = 1320;
+
+/** One typographic step smaller (15/16 of previous px). */
+const TYPE_STEP = 15 / 16;
+const fz = (px) => Math.round(px * TYPE_STEP * 100) / 100;
 
 // ---------------- Atoms ----------------
 const Hair = ({ v, style }) => (
@@ -125,14 +177,14 @@ const Hair = ({ v, style }) => (
 const Tag = ({ children, tone = 'neutral', mono = true, style }) => {
   const tones = {
     neutral: { color: T.inkDim, border: T.hair, bg: 'transparent' },
-    pos:     { color: T.green, border: 'rgba(127,183,150,0.28)', bg: 'rgba(127,183,150,0.06)' },
+    pos:     { color: T.accent, border: 'rgba(0, 46, 120, 0.35)', bg: 'rgba(0, 46, 120, 0.1)' },
     ink:     { color: T.ink, border: T.hairStrong, bg: T.cardHi },
   }[tone];
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 6,
       padding: '3px 8px', borderRadius: 4,
-      fontFamily: mono ? T.mono : T.sans, fontSize: 11, letterSpacing: 0.2,
+      fontFamily: mono ? T.mono : T.sans, fontSize: fz(11), letterSpacing: 0.2,
       color: tones.color, border: `1px solid ${tones.border}`, background: tones.bg,
       whiteSpace: 'nowrap',
       ...style,
@@ -142,9 +194,9 @@ const Tag = ({ children, tone = 'neutral', mono = true, style }) => {
 
 const Btn = ({ children, variant = 'primary', size = 'md', onClick, style, as = 'button', ...props }) => {
   const Comp = as;
-  const sizes = { sm: { padding: '8px 14px', fontSize: 13 }, md: { padding: '11px 18px', fontSize: 13.5 }, lg: { padding: '14px 22px', fontSize: 14.5 } }[size];
+  const sizes = { sm: { padding: '8px 14px', fontSize: fz(13) }, md: { padding: '11px 18px', fontSize: fz(13.5) }, lg: { padding: '14px 22px', fontSize: fz(14.5) } }[size];
   const variants = {
-    primary: { background: T.ink, color: '#111111', border: '1px solid ' + T.ink },
+    primary: { background: T.accent, color: T.ink, border: '1px solid ' + T.accent },
     secondary: { background: 'transparent', color: T.ink, border: '1px solid ' + T.hairStrong },
     ghost: { background: 'transparent', color: T.inkDim, border: '1px solid transparent' },
   }[variant];
@@ -166,20 +218,20 @@ const Btn = ({ children, variant = 'primary', size = 'md', onClick, style, as = 
 };
 
 const Mono = ({ children, style, className }) => (
-  <span className={className} style={{ fontFamily: T.mono, fontSize: 11.5, letterSpacing: 0.2, color: T.inkMute, ...style }}>{children}</span>
+  <span className={className} style={{ fontFamily: T.mono, fontSize: fz(11.5), letterSpacing: 0.2, color: T.inkMute, ...style }}>{children}</span>
 );
 
-const Section = ({ id, label, title, sub, children, pad = '120px 0' }) => {
+const Section = ({ id, label, title, sub, children, pad = '120px 0', topBorder = true }) => {
   const { ref, revealStyle } = useReveal(0);
   return (
-    <section ref={ref} id={id} style={{ padding: pad, borderTop: '1px solid ' + T.hair, ...revealStyle }}>
-      <div style={{ maxWidth: 1240, margin: '0 auto', padding: '0 32px' }}>
+    <section ref={ref} id={id} style={{ padding: pad, ...(topBorder ? { borderTop: '1px solid ' + T.hair } : {}), ...revealStyle }}>
+      <div style={{ maxWidth: CONTENT_MAX, margin: '0 auto', padding: '0 32px' }}>
         {(label || title) && (
           <div style={{ marginBottom: 56, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 32, flexWrap: 'wrap' }}>
             <div style={{ maxWidth: 720 }}>
               {label && <Mono style={{ display: 'block', marginBottom: 16, color: T.inkMute, textTransform: 'uppercase' }}>{label}</Mono>}
-              {title && <h2 style={{ margin: 0, fontSize: 44, lineHeight: 1.05, letterSpacing: -1.2, fontWeight: 500, color: T.ink }}>{title}</h2>}
-              {sub && <p style={{ margin: '18px 0 0', fontSize: 16, lineHeight: 1.55, color: T.inkDim, maxWidth: 580 }}>{sub}</p>}
+              {title && <h2 style={{ margin: 0, fontSize: fz(44), lineHeight: 1.05, letterSpacing: -1.2, fontWeight: 500, color: T.ink }}>{title}</h2>}
+              {sub && <p style={{ margin: '18px 0 0', fontSize: fz(16), lineHeight: 1.55, color: T.inkDim, maxWidth: 580 }}>{sub}</p>}
             </div>
           </div>
         )}
@@ -190,75 +242,97 @@ const Section = ({ id, label, title, sub, children, pad = '120px 0' }) => {
 };
 
 // ---------------- Logo ----------------
-const Logo = ({ size = 38 }) => (
-  <div
-    style={{
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 5,
-      lineHeight: 1,
-    }}
-  >
-    <span
-      aria-hidden="true"
+const Logo = ({ size = 44, wordmark = true, motion = true }) => {
+  const wmTrans = motion
+    ? 'max-width 380ms cubic-bezier(0.2, 0.8, 0.25, 1), opacity 220ms ease-out'
+    : 'none';
+  return (
+    <div
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        justifyContent: 'flex-start',
-        flexShrink: 0,
-        height: size,
-        lineHeight: 0,
+        gap: 5,
+        lineHeight: 1,
       }}
     >
-      <img
-        src={logoImg}
-        alt=""
+      <span
+        aria-hidden="true"
         style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'flex-start',
+          flexShrink: 0,
           height: size,
-          width: 'auto',
-          maxHeight: size,
-          maxWidth: Math.round(size * 2.85),
-          objectFit: 'contain',
-          display: 'block',
+          lineHeight: 0,
         }}
-        draggable={false}
-        decoding="async"
-      />
-    </span>
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-      <span style={{ fontFamily: T.sans, fontSize: 15, fontWeight: 600, letterSpacing: -0.3, color: T.ink }}>Vmax</span>
-      <span style={{ fontFamily: T.mono, fontSize: 10.5, color: T.inkFaint, letterSpacing: 1 }}>/EXEC</span>
-    </span>
-  </div>
-);
+      >
+        <img
+          src={logoImg}
+          alt=""
+          style={{
+            height: size,
+            width: 'auto',
+            maxHeight: size,
+            maxWidth: Math.round(size * 2.85),
+            objectFit: 'contain',
+            display: 'block',
+          }}
+          draggable={false}
+          decoding="async"
+        />
+      </span>
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          maxWidth: wordmark ? 260 : 0,
+          opacity: wordmark ? 1 : 0,
+          overflow: 'hidden',
+          transition: wmTrans,
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontFamily: T.sans, fontSize: fz(15), fontWeight: 600, letterSpacing: -0.3, color: T.ink }}>Vmax</span>
+        <span style={{ fontFamily: T.mono, fontSize: fz(10.5), color: T.inkFaint, letterSpacing: 1 }}>/EXEC</span>
+      </span>
+    </div>
+  );
+};
 
 // ---------------- Nav ----------------
 const Nav = () => {
   const [scrolled, setScrolled] = useState(false);
   const { ref, revealStyle } = useReveal(0);
+
   useEffect(() => {
     const onS = () => setScrolled(window.scrollY > 8);
-    window.addEventListener('scroll', onS);
+    onS();
+    window.addEventListener('scroll', onS, { passive: true });
     return () => window.removeEventListener('scroll', onS);
   }, []);
+
   const navBgTransition = 'background 220ms ease-out, backdrop-filter 220ms ease-out';
   return (
     <header ref={ref} style={{
       position: 'sticky', top: 0, zIndex: 50,
-      background: scrolled ? 'rgba(17,17,17,0.78)' : 'transparent',
+      background: scrolled ? 'rgba(1, 9, 22, 0.82)' : 'transparent',
       backdropFilter: scrolled ? 'blur(20px) saturate(140%)' : 'none',
       ...revealStyle,
       transition: revealStyle.transition
         ? `${revealStyle.transition}, ${navBgTransition}`
         : navBgTransition,
     }}>
-      <div style={{ maxWidth: 1240, margin: '0 auto', padding: '16px 32px', display: 'flex', alignItems: 'center', gap: 40 }}>
-        <Logo />
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Mono style={{ color: T.inkMute }}>macOS · arm64</Mono>
-          <Btn variant="ghost" size="sm">Sign in</Btn>
-          <Btn variant="primary" size="sm" {...macDownloadBtnProps(MAC_DOWNLOAD_URL)}>Download<span style={{ opacity: 0.4 }}>·</span><Mono style={{ color: 'inherit', opacity: 0.6 }}>0.7.2</Mono></Btn>
-        </div>
+      <div style={{
+        maxWidth: CONTENT_MAX,
+        margin: '0 auto',
+        padding: '16px 32px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: 64,
+      }}>
+        <Logo wordmark={false} size={48} motion={false} />
       </div>
     </header>
   );
@@ -270,6 +344,21 @@ const HERO_PAIR_STEPS = [
   [0, 2],
   [1, 2],
 ];
+
+/** Status lines under each agent card: rotate while hot so the demo reads as “live workflow”. */
+const HERO_AGENT_HOT_ROTATION = {
+  claude: ['Planning your task…', 'Reading repo + diff…', 'Drafting next steps…'],
+  codex: ['Applying a patch…', 'Editing files (Codex)…', 'Running CLI locally…'],
+  cursor: ['Handoff to Cursor…', 'Pasting into agent…', 'Waiting in editor…'],
+};
+const HERO_AGENT_IDLE = {
+  claude: 'Standby · Claude Code',
+  codex: 'Standby · Codex CLI',
+  cursor: 'Standby · Cursor bridge',
+};
+
+/** Interval for rotating agent pairs + status lines (ms). Higher = easier to read. */
+const HERO_TICK_MS = 1500;
 
 // ---------------- Hero ----------------
 const Hero = () => {
@@ -285,25 +374,32 @@ const Hero = () => {
   }, []);
   useEffect(() => {
     if (reduceMotion) return undefined;
-    const t = setInterval(() => setTick((x) => x + 1), 340);
+    const t = setInterval(() => setTick((x) => x + 1), HERO_TICK_MS);
     return () => clearInterval(t);
   }, [reduceMotion]);
-  const duo = reduceMotion ? HERO_PAIR_STEPS[0] : HERO_PAIR_STEPS[tick % HERO_PAIR_STEPS.length];
+  const pairIdx = reduceMotion ? 0 : tick % HERO_PAIR_STEPS.length;
+  const duo = HERO_PAIR_STEPS[pairIdx];
   const duoSet = new Set(duo);
+
+  const agents = useMemo(() => {
+    const beat = reduceMotion ? 0 : tick % 3;
+    const hotIdx = new Set(HERO_PAIR_STEPS[pairIdx]);
+    const ids = ['claude', 'codex', 'cursor'];
+    return ids.map((id, i) => {
+      const hot = hotIdx.has(i);
+      const status = hot ? HERO_AGENT_HOT_ROTATION[id][beat] : HERO_AGENT_IDLE[id];
+      const delta = hot ? (id === 'cursor' ? 'live' : id === 'claude' ? '+18' : '+04') : '—';
+      return { name: id, status, delta };
+    });
+  }, [tick, pairIdx, reduceMotion]);
 
   const nodeDefs = useMemo(() => ([
     { x: 160, y: 50, label: 'Claude', sub: 'v2.1.138', color: T.amber },
     { x: 240, y: 180, label: 'Codex', sub: '0.130.0', color: T.green },
     { x: 80, y: 180, label: 'Cursor', sub: 'editor bridge', color: T.violet },
   ]), []);
-
-  const agents = [
-    { name: 'claude', status: 'plan', delta: '+18' },
-    { name: 'codex', status: 'patch', delta: '+04' },
-    { name: 'cursor', status: 'idle', delta: '··' },
-  ];
   return (
-    <div ref={heroRevealRef} style={{ position: 'relative', padding: '88px 0 0', overflow: 'hidden', ...heroRevealStyle }}>
+    <div ref={heroRevealRef} style={{ position: 'relative', padding: '100px 0 0', overflow: 'visible', ...heroRevealStyle }}>
       {/* faint grid */}
       <div style={{
         position: 'absolute', inset: 0, opacity: 0.6, pointerEvents: 'none',
@@ -313,37 +409,66 @@ const Hero = () => {
         WebkitMaskImage: 'radial-gradient(ellipse 70% 60% at 50% 30%, black 30%, transparent 75%)',
       }} />
 
-      <div style={{ maxWidth: 1240, margin: '0 auto', padding: '0 32px', position: 'relative' }}>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, padding: '6px 12px', border: '1px solid ' + T.hair, borderRadius: 999, marginBottom: 40 }}>
-          <span style={{ width: 6, height: 6, borderRadius: 3, background: T.green, boxShadow: '0 0 10px ' + T.green }} />
+      <div style={{ maxWidth: CONTENT_MAX, margin: '0 auto', padding: '0 32px', position: 'relative' }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, padding: '6px 12px', border: '1px solid ' + T.hair, borderRadius: 999, marginBottom: 48 }}>
+          <span style={{ width: 6, height: 6, borderRadius: 3, background: T.accent, boxShadow: '0 0 12px ' + T.accentGlow }} />
           <Mono style={{ color: T.inkDim }}>v0.7.2 · private beta</Mono>
           <span style={{ width: 1, height: 12, background: T.hair }} />
           <Mono style={{ color: T.inkMute }}>local-first · macOS only</Mono>
         </div>
 
-        <h1 style={{
-          margin: 0, fontFamily: T.sans, fontWeight: 500,
-          fontSize: 88, lineHeight: 0.98, letterSpacing: -3.5,
-          color: T.ink, maxWidth: 1100,
-        }}>
-          Manage your<br />
-          <span style={{ color: T.inkMute }}>coding agents.</span>
+        <h1
+          className={`vmax-hero-title${reduceMotion ? ' vmax-hero-no-motion' : ''}`}
+          style={{
+            margin: 0,
+            fontFamily: T.sans,
+            fontWeight: 500,
+            fontSize: fz(88),
+            lineHeight: 1.06,
+            letterSpacing: -3.5,
+            maxWidth: 1100,
+            color: T.ink,
+          }}
+        >
+          <span className="vmax-hero-line vmax-hero-line-top" style={{ display: 'block' }}>
+            {['Manage', 'your'].map((w, i) => (
+              <span
+                key={w}
+                className="vmax-hero-word"
+                style={{ animationDelay: reduceMotion ? '0ms' : `${i * 95}ms` }}
+              >
+                {w}{i === 0 ? '\u00a0' : ''}
+              </span>
+            ))}
+          </span>
+          <span className="vmax-hero-subblock" style={{ display: 'inline-block' }}>
+            <span className="vmax-hero-line-gradient-wrap" style={{ display: 'inline' }}>
+              <span
+                className="vmax-hero-word vmax-hero-gradient-line"
+                style={{ animationDelay: reduceMotion ? '0ms' : '210ms' }}
+              >
+                coding agents.
+              </span>
+            </span>
+          </span>
         </h1>
 
         <p style={{
           margin: '36px 0 0', maxWidth: 580,
-          fontSize: 17, lineHeight: 1.5, color: T.inkDim, fontFamily: T.sans,
+          fontSize: fz(17), lineHeight: 1.5, color: T.inkDim, fontFamily: T.sans,
         }}>
           Vmax is the manager for coding agents: Claude, Codex, and Cursor route through one workspace,
           with live logs, human gates, isolated worktrees, and a written recap after every run.
         </p>
 
         <div style={{ display: 'flex', gap: 12, marginTop: 40, alignItems: 'center' }}>
-          <Btn variant="primary" size="lg" {...macDownloadBtnProps(MAC_DOWNLOAD_URL)}>Download for macOS<span style={{ opacity: 0.4, fontFamily: T.mono, fontSize: 11 }}>↓ 38mb</span></Btn>
+          <span className="vmax-rainbow-ring">
+            <Btn variant="primary" size="lg" {...macDownloadBtnProps(MAC_DOWNLOAD_URL)}>Download for macOS<span style={{ opacity: 0.4, fontFamily: T.mono, fontSize: fz(11) }}>↓ 38mb</span></Btn>
+          </span>
           <Btn variant="secondary" size="lg">Read the docs →</Btn>
           <div style={{ marginLeft: 16, display: 'flex', alignItems: 'center', gap: 14 }}>
             <Mono>used by engineers at</Mono>
-            <div style={{ display: 'flex', gap: 14, fontFamily: T.sans, fontSize: 12.5, color: T.inkMute, fontWeight: 500, letterSpacing: -0.2 }}>
+            <div style={{ display: 'flex', gap: 14, fontFamily: T.sans, fontSize: fz(12.5), color: T.inkMute, fontWeight: 500, letterSpacing: -0.2 }}>
               <span>Forge</span><span>Caldera</span><span>Northwind</span><span>Heron</span>
             </div>
           </div>
@@ -358,7 +483,7 @@ const Hero = () => {
             {/* window chrome */}
             <div style={{ display: 'flex', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid ' + T.hair, gap: 14 }}>
               <div style={{ display: 'flex', gap: 6 }}>
-                {['#3a3a3d', '#3a3a3d', '#3a3a3d'].map((c, i) => <div key={i} style={{ width: 10, height: 10, borderRadius: 5, background: c, border: '1px solid rgba(255,255,255,0.04)' }} />)}
+                {['#2a3548', '#2a3548', '#2a3548'].map((c, i) => <div key={i} style={{ width: 10, height: 10, borderRadius: 5, background: c, border: '1px solid rgba(235,240,231,0.06)' }} />)}
               </div>
               <Mono style={{ marginLeft: 8 }}>vmax · workspace · exec/main · 25 changed</Mono>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
@@ -372,10 +497,24 @@ const Hero = () => {
               {/* left: My Tasks */}
               <div style={{ padding: 22, borderRight: '1px solid ' + T.hair }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-                  <Mono style={{ color: T.inkMute, textTransform: 'uppercase' }}>my tasks · linear</Mono>
+                  <Mono style={{ color: T.inkMute, textTransform: 'uppercase', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span>my tasks ·</span>
+                    <span
+                      style={{
+                        color: T.accent,
+                        fontWeight: 600,
+                        padding: '2px 7px',
+                        borderRadius: 4,
+                        background: 'rgba(0, 46, 120, 0.14)',
+                        border: '1px solid rgba(0, 46, 120, 0.35)',
+                      }}
+                    >
+                      linear
+                    </span>
+                  </Mono>
                   <Mono>02/13</Mono>
                 </div>
-                <div style={{ display: 'flex', gap: 6, marginBottom: 14, fontFamily: T.mono, fontSize: 11 }}>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 14, fontFamily: T.mono, fontSize: fz(11) }}>
                   {['ALL 13', 'CULIN 11', 'VMAX 2'].map((x, i) => (
                     <span key={x} style={{
                       padding: '4px 8px', borderRadius: 4, border: '1px solid ' + (i === 2 ? T.hairStrong : T.hair),
@@ -391,7 +530,7 @@ const Hero = () => {
                 ].map((row, i) => (
                   <div key={row.id} style={{ display: 'flex', gap: 10, padding: '10px 0', borderTop: i === 0 ? 'none' : '1px solid ' + T.hair }}>
                     <Mono style={{ color: T.inkMute, minWidth: 52 }}>{row.id}</Mono>
-                    <div style={{ flex: 1, fontSize: 13, color: T.ink, lineHeight: 1.4 }}>
+                    <div style={{ flex: 1, fontSize: fz(13), color: T.ink, lineHeight: 1.4 }}>
                       {row.t}
                       <div style={{ marginTop: 4, display: 'flex', gap: 6 }}>
                         <Mono style={{ color: T.inkFaint }}>todo</Mono>
@@ -405,7 +544,7 @@ const Hero = () => {
               </div>
 
               {/* center: agent diagram */}
-              <div style={{ padding: 22, borderRight: '1px solid ' + T.hair, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+              <div style={{ padding: 22, borderRight: '1px solid ' + T.hair, position: 'relative', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
                   <Mono style={{ color: T.inkMute, textTransform: 'uppercase' }}>live agents</Mono>
                   <Mono>3 connected</Mono>
@@ -414,8 +553,8 @@ const Hero = () => {
                   <svg viewBox="0 0 320 280" style={{ width: '100%', height: '100%' }}>
                     <defs>
                       <radialGradient id="rg" cx="50%" cy="50%" r="50%">
-                        <stop offset="0%" stopColor="rgba(255,255,255,0.1)" />
-                        <stop offset="100%" stopColor="rgba(255,255,255,0)" />
+                        <stop offset="0%" stopColor="rgba(235,240,231,0.1)" />
+                        <stop offset="100%" stopColor="rgba(235,240,231,0)" />
                       </radialGradient>
                       <filter id="vx-line-glow" x="-55%" y="-55%" width="210%" height="210%">
                         <feGaussianBlur stdDeviation="2.2" result="b" />
@@ -425,8 +564,8 @@ const Hero = () => {
                         </feMerge>
                       </filter>
                       <radialGradient id="vx-hub-pulse" cx="50%" cy="50%" r="50%">
-                        <stop offset="0%" stopColor="rgba(255,255,255,0.14)" />
-                        <stop offset="70%" stopColor="rgba(255,255,255,0)" />
+                        <stop offset="0%" stopColor="rgba(235,240,231,0.14)" />
+                        <stop offset="70%" stopColor="rgba(235,240,231,0)" />
                       </radialGradient>
                     </defs>
                     <circle cx="160" cy="140" r="120" fill="url(#rg)" />
@@ -450,7 +589,7 @@ const Hero = () => {
                     <circle cx="160" cy="140" r="48" fill="none" stroke={T.hairStrong} />
                     {/* center */}
                     {!reduceMotion && (
-                      <circle cx="160" cy="140" r="46" fill="none" stroke="rgba(245,245,247,0.07)" strokeWidth="12">
+                      <circle cx="160" cy="140" r="46" fill="none" stroke="rgba(235,240,231,0.08)" strokeWidth="12">
                         <animate attributeName="opacity" attributeType="CSS" values="0.55;1;0.55" dur="2.2s" repeatCount="indefinite" />
                       </circle>
                     )}
@@ -463,8 +602,8 @@ const Hero = () => {
                         </>
                       )}
                     </circle>
-                    <text x="160" y="138" textAnchor="middle" fill={T.ink} fontFamily={T.sans} fontSize="11" fontWeight="600">Vmax</text>
-                    <text x="160" y="151" textAnchor="middle" fill={T.inkMute} fontFamily={T.mono} fontSize="8">manager</text>
+                    <text x="160" y="138" textAnchor="middle" fill={T.ink} fontFamily={T.sans} fontSize={fz(11)} fontWeight="600">Vmax</text>
+                    <text x="160" y="151" textAnchor="middle" fill={T.inkMute} fontFamily={T.mono} fontSize={fz(8)}>manager</text>
                     {/* dormant spokes first */}
                     {nodeDefs.map((n, i) => {
                       const hot = duoSet.has(i);
@@ -498,15 +637,15 @@ const Hero = () => {
                                 filter="url(#vx-line-glow)"
                                 strokeDasharray={`${dash} ${len}`}
                               >
-                                <animate attributeName="stroke-dashoffset" from="0" to={-(len + dash)} dur="0.32s" repeatCount="indefinite" />
+                                <animate attributeName="stroke-dashoffset" from="0" to={-(len + dash)} dur="1.05s" repeatCount="indefinite" />
                               </line>
                               <circle r="5" fill={n.color} opacity={0}>
-                                <animateMotion dur="0.32s" repeatCount="indefinite" path={`M160,140 L${n.x},${n.y}`} />
-                                <animate attributeName="opacity" values="0;1;0" dur="0.32s" repeatCount="indefinite" />
+                                <animateMotion dur="1.05s" repeatCount="indefinite" path={`M160,140 L${n.x},${n.y}`} />
+                                <animate attributeName="opacity" values="0;1;0" dur="1.05s" repeatCount="indefinite" />
                               </circle>
-                              <circle r="2.8" fill="#fff" opacity={0}>
-                                <animateMotion dur="0.32s" repeatCount="indefinite" begin="0.1s" path={`M160,140 L${n.x},${n.y}`} />
-                                <animate attributeName="opacity" values="0;1;0" dur="0.32s" repeatCount="indefinite" begin="0.1s" />
+                              <circle r="2.8" fill={T.ink} opacity={0}>
+                                <animateMotion dur="1.05s" repeatCount="indefinite" begin="0.28s" path={`M160,140 L${n.x},${n.y}`} />
+                                <animate attributeName="opacity" values="0;1;0" dur="1.05s" repeatCount="indefinite" begin="0.28s" />
                               </circle>
                             </>
                           )}
@@ -516,13 +655,13 @@ const Hero = () => {
                               y1="140"
                               x2={n.x}
                               y2={n.y}
-                              stroke="#fff"
+                              stroke={T.ink}
                               strokeWidth={0.9}
                               strokeLinecap="round"
                               strokeDasharray={`4 ${Math.max(len - 4, 4)}`}
                               opacity={0.45}
                             >
-                              <animate attributeName="stroke-dashoffset" from="0" to={-(len + 24)} dur="0.52s" repeatCount="indefinite" />
+                              <animate attributeName="stroke-dashoffset" from="0" to={-(len + 24)} dur="1.65s" repeatCount="indefinite" />
                             </line>
                           )}
                         </g>
@@ -535,42 +674,57 @@ const Hero = () => {
                         <g key={`hero-node-${i}`}>
                           {!reduceMotion && hot && (
                             <circle cx={n.x} cy={n.y} r="30" fill="none" stroke={n.color} strokeWidth={1} opacity={0.25}>
-                              <animate attributeName="r" values="26;36;26" dur="0.92s" repeatCount="indefinite" />
-                              <animate attributeName="opacity" values="0.6;0.15;0.6" dur="0.92s" repeatCount="indefinite" />
+                              <animate attributeName="r" values="26;36;26" dur="2.35s" repeatCount="indefinite" />
+                              <animate attributeName="opacity" values="0.6;0.15;0.6" dur="2.35s" repeatCount="indefinite" />
                             </circle>
                           )}
                           <circle cx={n.x} cy={n.y} r="24" fill={T.bg} stroke={n.color} strokeWidth={hot ? 1.65 : 1} opacity={hot ? 1 : 0.45} />
-                          <text x={n.x} y={n.y - 1} textAnchor="middle" fill={T.ink} fontFamily={T.sans} fontSize="10" fontWeight="500">{n.label}</text>
-                          <text x={n.x} y={n.y + 11} textAnchor="middle" fill={T.inkMute} fontFamily={T.mono} fontSize="7">{n.sub}</text>
+                          <text x={n.x} y={n.y - 1} textAnchor="middle" fill={T.ink} fontFamily={T.sans} fontSize={fz(10)} fontWeight="500">{n.label}</text>
+                          <text x={n.x} y={n.y + 11} textAnchor="middle" fill={T.inkMute} fontFamily={T.mono} fontSize={fz(7)}>{n.sub}</text>
                         </g>
                       );
                     })}
                   </svg>
                 </div>
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, minWidth: 0 }}>
                   {agents.map((a, i) => {
                     const pulse = duoSet.has(i);
                     const agentColor = nodeDefs[i]?.color ?? T.green;
+                    const deltaColor =
+                      a.delta.startsWith('+') || a.delta === 'live' ? T.green : T.inkFaint;
                     return (
                       <div
                         key={a.name}
+                        title={pulse ? `${a.name}: active — ${a.status}` : `${a.name}: ${a.status}`}
                         style={{
-                          flex: 1,
+                          minWidth: 0,
+                          maxWidth: '100%',
+                          overflow: 'hidden',
                           padding: '8px 10px',
                           border: `1px solid ${pulse ? T.hairStrong : T.hair}`,
                           borderRadius: 6,
                           ...(pulse && !reduceMotion
                             ? {
-                                boxShadow: `0 0 0 1px rgba(255,255,255,0.05), 0 14px 32px -12px ${agentColor}`,
+                                boxShadow: `0 0 0 1px rgba(235,240,231,0.06), 0 14px 32px -12px ${agentColor}`,
                               }
                             : {}),
-                          transition: 'border-color 120ms ease-out, box-shadow 120ms ease-out',
+                          transition: 'border-color 380ms ease-out, box-shadow 380ms ease-out',
                         }}
                       >
-                      <Mono style={{ color: T.inkDim, textTransform: 'uppercase' }}>{a.name}</Mono>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-                        <Mono style={{ color: T.ink }}>{a.status}</Mono>
-                        <Mono style={{ color: a.delta.startsWith('+') ? T.green : T.inkFaint }}>{a.delta}</Mono>
+                      <Mono style={{ color: T.inkDim, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{a.name}</Mono>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginTop: 4 }}>
+                        <Mono style={{
+                          color: T.ink,
+                          fontSize: fz(11),
+                          lineHeight: 1.35,
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        >{a.status}</Mono>
+                        <Mono style={{ color: deltaColor, flexShrink: 0, fontSize: fz(11) }}>{a.delta}</Mono>
                       </div>
                     </div>
                     );
@@ -581,10 +735,13 @@ const Hero = () => {
               {/* right: terminal */}
               <div style={{ padding: 22, display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-                  <Mono style={{ color: T.inkMute, textTransform: 'uppercase' }}>recap · run #4823</Mono>
+                  <Mono style={{ color: T.inkMute }}>
+                    <span style={{ textTransform: 'uppercase' }}>recap · </span>
+                    <span style={{ textTransform: 'none' }}>ClaudeCodex_Run4823</span>
+                  </Mono>
                   <Tag tone="pos">passed</Tag>
                 </div>
-                <div style={{ fontFamily: T.mono, fontSize: 11.5, lineHeight: 1.65, color: T.inkDim, flex: 1 }}>
+                <div style={{ fontFamily: T.mono, fontSize: fz(11.5), lineHeight: 1.65, color: T.inkDim, flex: 1 }}>
                   <div style={{ color: T.inkMute }}># intent</div>
                   <div style={{ color: T.ink }}>render UI before vehicle_state sync on iOS startup</div>
                   <div style={{ color: T.inkMute, marginTop: 10 }}># pipeline</div>
@@ -597,15 +754,15 @@ const Hero = () => {
                   <div>ios/State/VehicleStore.swift</div>
                   <div style={{ color: T.inkMute, marginTop: 10 }}># cost</div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>haiku → opus → haiku</span>
+                    <span>gpt5.5 → opus → haiku</span>
                     <span style={{ color: T.green }}>$0.21</span>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* terminal strip */}
-            <div style={{ padding: '14px 22px', borderTop: '1px solid ' + T.hair, fontFamily: T.mono, fontSize: 11.5, color: T.inkDim, display: 'flex', gap: 24 }}>
+            {/* terminal strip — continuous with workspace (no hard divider) */}
+            <div style={{ padding: '16px 22px', fontFamily: T.mono, fontSize: fz(11.5), color: T.inkDim, display: 'flex', gap: 24 }}>
               <span style={{ color: T.inkMute }}>$</span>
               <span>Scanning repo… Watching exec on main.</span>
               <span style={{ color: T.inkFaint }}>·</span>
@@ -622,71 +779,87 @@ const Hero = () => {
 };
 
 // ---------------- Instrument Panels (Product story) ----------------
-const InstrumentPanel = ({ tag, title, kpi, kpiLabel, delta, children }) => (
-  <div className="vmax-panel-cell" style={{
-    border: '1px solid ' + T.hair, borderRadius: 14, background: T.card,
-    padding: 22, display: 'flex', flexDirection: 'column', gap: 18,
-    transition: 'border-color 160ms',
-  }}
-    onMouseEnter={e => e.currentTarget.style.borderColor = T.hairStrong}
-    onMouseLeave={e => e.currentTarget.style.borderColor = T.hair}
-  >
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-      <Mono style={{ color: T.inkMute, textTransform: 'uppercase' }}>{tag}</Mono>
-      <Mono style={{ color: T.inkFaint }}>illustrative</Mono>
-    </div>
-    <div>
-      <div style={{ fontFamily: T.sans, fontSize: 38, fontWeight: 500, letterSpacing: -1, color: T.ink, lineHeight: 1, fontVariantNumeric: 'tabular-nums', display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        {kpi}
-        {delta && <span style={{ fontSize: 13, color: T.green, fontFamily: T.mono, letterSpacing: 0 }}>↑ {delta}</span>}
+const InstrumentPanel = ({
+  tag, title, kpiLabel, delta, children, kpiCount, active, reduceMotion,
+}) => {
+  const n = useCountUp(kpiCount.end, active, reduceMotion, kpiCount.durationMs ?? 1450);
+  const kpiStr = formatKpiNum(n, kpiCount);
+  return (
+    <div className="vmax-panel-cell" style={{
+      border: '1px solid ' + T.hair, borderRadius: 14, background: T.card,
+      padding: 22, display: 'flex', flexDirection: 'column', gap: 18,
+      transition: 'border-color 160ms',
+    }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = T.hairStrong}
+      onMouseLeave={e => e.currentTarget.style.borderColor = T.hair}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Mono style={{ color: T.inkMute, textTransform: 'uppercase' }}>{tag}</Mono>
+        <Mono style={{ color: T.inkFaint }}>illustrative</Mono>
       </div>
-      <div style={{ marginTop: 8, fontSize: 13, color: T.inkDim, fontFamily: T.sans, letterSpacing: -0.1 }}>{kpiLabel}</div>
+      <div>
+        <div style={{ fontFamily: T.sans, fontSize: fz(38), fontWeight: 500, letterSpacing: -1, color: T.ink, lineHeight: 1, fontVariantNumeric: 'tabular-nums', display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          {kpiStr}
+          {delta && <span style={{ fontSize: fz(13), color: T.green, fontFamily: T.mono, letterSpacing: 0 }}>↑ {delta}</span>}
+        </div>
+        <div style={{ marginTop: 8, fontSize: fz(13), color: T.inkDim, fontFamily: T.sans, letterSpacing: -0.1 }}>{kpiLabel}</div>
+      </div>
+      <div style={{ flex: 1, minHeight: 120 }}>{children}</div>
+      <div style={{ fontSize: fz(13.5), color: T.ink, fontFamily: T.sans, fontWeight: 500, letterSpacing: -0.2 }}>{title}</div>
     </div>
-    <div style={{ flex: 1, minHeight: 120 }}>{children}</div>
-    <div style={{ fontSize: 13.5, color: T.ink, fontFamily: T.sans, fontWeight: 500, letterSpacing: -0.2 }}>{title}</div>
-  </div>
-);
+  );
+};
 
-const BarChart = () => {
+const BarChart = ({ active, reduceMotion }) => {
   const bars = [22, 38, 31, 54, 48, 71, 64, 82, 76, 88, 72, 90];
+  const p = useCountUp(1, active, reduceMotion, 1100);
   return (
     <svg viewBox="0 0 320 110" style={{ width: '100%', height: 110 }}>
       <line x1="0" y1="105" x2="320" y2="105" stroke={T.hair} />
-      {bars.map((h, i) => (
-        <rect key={i} x={i * 27 + 4} y={105 - h} width="18" height={h}
-          fill={i === bars.length - 1 ? T.ink : 'rgba(255,255,255,0.12)'}
-          stroke={i === bars.length - 1 ? T.ink : 'rgba(255,255,255,0.18)'}
-          strokeWidth="0.5" />
-      ))}
+      {bars.map((h, i) => {
+        const stagger = i * 0.055;
+        const t = Math.max(0, Math.min(1, (p * 1.2 - stagger) / (1 - stagger + 0.001)));
+        const H = h * t;
+        return (
+          <rect key={i} x={i * 27 + 4} y={105 - H} width="18" height={H}
+            fill={i === bars.length - 1 ? T.ink : 'rgba(235,240,231,0.12)'}
+            stroke={i === bars.length - 1 ? T.ink : 'rgba(235,240,231,0.18)'}
+            strokeWidth="0.5" />
+        );
+      })}
     </svg>
   );
 };
 
-const DonutChart = ({ segs }) => {
-  // segs: [{value, color}]
+const DonutChart = ({ segs, active, reduceMotion }) => {
   const total = segs.reduce((a, b) => a + b.value, 0);
   let acc = 0;
   const r = 42, c = 2 * Math.PI * r;
+  const t = useCountUp(1, active, reduceMotion, 1300);
+  const scale = reduceMotion ? 1 : 0.82 + 0.18 * t;
+  const rot = reduceMotion ? 0 : -14 * (1 - t);
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 18, height: '100%' }}>
-      <svg viewBox="0 0 120 120" width="120" height="120" style={{ flexShrink: 0 }}>
-        <circle cx="60" cy="60" r={r} stroke={T.hair} strokeWidth="14" fill="none" />
-        {segs.map((s, i) => {
-          const len = (s.value / total) * c;
-          const off = -acc;
-          acc += len;
-          return (
-            <circle key={i} cx="60" cy="60" r={r} stroke={s.color} strokeWidth="14" fill="none"
-              strokeDasharray={`${len} ${c - len}`} strokeDashoffset={off}
-              transform="rotate(-90 60 60)" strokeLinecap="butt" />
-          );
-        })}
-        <text x="60" y="58" textAnchor="middle" fill={T.ink} fontFamily={T.sans} fontSize="16" fontWeight="500">{total}</text>
-        <text x="60" y="72" textAnchor="middle" fill={T.inkMute} fontFamily={T.mono} fontSize="8">RUNS / 24H</text>
+      <svg viewBox="0 0 120 120" width="120" height="120" style={{ flexShrink: 0, overflow: 'visible' }}>
+        <g transform={`translate(60 60) rotate(${rot}) scale(${scale}) translate(-60 -60)`} style={{ opacity: reduceMotion ? 1 : 0.15 + 0.85 * t }}>
+          <circle cx="60" cy="60" r={r} stroke={T.hair} strokeWidth="14" fill="none" />
+          {segs.map((s, i) => {
+            const len = (s.value / total) * c;
+            const off = -acc;
+            acc += len;
+            return (
+              <circle key={i} cx="60" cy="60" r={r} stroke={s.color} strokeWidth="14" fill="none"
+                strokeDasharray={`${len} ${c - len}`} strokeDashoffset={off}
+                transform="rotate(-90 60 60)" strokeLinecap="butt" />
+            );
+          })}
+        </g>
+        <text x="60" y="58" textAnchor="middle" fill={T.ink} fontFamily={T.sans} fontSize={fz(16)} fontWeight="500">{total}</text>
+        <text x="60" y="72" textAnchor="middle" fill={T.inkMute} fontFamily={T.mono} fontSize={fz(8)}>RUNS / 24H</text>
       </svg>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}>
         {segs.map((s, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: T.mono, fontSize: 11 }}>
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: T.mono, fontSize: fz(11) }}>
             <span style={{ width: 8, height: 8, background: s.color, borderRadius: 2 }} />
             <span style={{ color: T.inkDim }}>{s.label}</span>
             <span style={{ marginLeft: 'auto', color: T.ink, fontVariantNumeric: 'tabular-nums' }}>{s.value}</span>
@@ -697,25 +870,33 @@ const DonutChart = ({ segs }) => {
   );
 };
 
-const Heatmap = () => {
+const Heatmap = ({ active, reduceMotion }) => {
   const rows = 7, cols = 24;
-  const cells = Array.from({ length: rows * cols }, (_, i) => {
-    const v = Math.sin(i * 0.7) * 0.4 + Math.cos(i * 0.3) * 0.3 + Math.random() * 0.3 + 0.3;
+  const cells = useMemo(() => Array.from({ length: rows * cols }, (_, i) => {
+    const v = Math.sin(i * 0.7) * 0.4 + Math.cos(i * 0.3) * 0.3 + Math.sin(i * 1.1) * 0.2 + 0.35;
     return Math.max(0, Math.min(1, v));
-  });
+  }), []);
   return (
     <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 2 }}>
       {cells.map((v, i) => (
-        <div key={i} style={{
-          aspectRatio: '1', borderRadius: 2,
-          background: v > 0.7 ? `rgba(255,255,255,${0.18 + v * 0.4})` : `rgba(255,255,255,${0.04 + v * 0.08})`,
-        }} />
+        <div
+          key={i}
+          style={{
+            aspectRatio: '1',
+            borderRadius: 2,
+            background: v > 0.7 ? `rgba(235,240,231,${0.15 + v * 0.42})` : `rgba(235,240,231,${0.04 + v * 0.08})`,
+            opacity: reduceMotion || active ? 1 : 0,
+            transform: reduceMotion || active ? 'scale(1)' : 'scale(0.6)',
+            transition: reduceMotion ? 'none' : `opacity 0.4s cubic-bezier(0.16, 1, 0.3, 1), transform 0.45s cubic-bezier(0.16, 1, 0.3, 1)`,
+            transitionDelay: reduceMotion || !active ? '0ms' : `${Math.floor(i / cols) * 22 + (i % cols) * 12}ms`,
+          }}
+        />
       ))}
     </div>
   );
 };
 
-const Funnel = () => {
+const Funnel = ({ active, reduceMotion }) => {
   const stages = [
     { label: 'intent', value: 100 },
     { label: 'plan', value: 84 },
@@ -727,10 +908,15 @@ const Funnel = () => {
       {stages.map((s, i) => (
         <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Mono style={{ color: T.inkMute, width: 60 }}>{s.label}</Mono>
-          <div style={{ flex: 1, height: 18, background: 'rgba(255,255,255,0.04)', borderRadius: 4, position: 'relative', overflow: 'hidden' }}>
+          <div style={{ flex: 1, height: 18, background: 'rgba(235,240,231,0.05)', borderRadius: 4, position: 'relative', overflow: 'hidden' }}>
             <div style={{
-              position: 'absolute', inset: 0, width: s.value + '%',
-              background: `linear-gradient(90deg, rgba(255,255,255,0.22), rgba(255,255,255,0.08))`,
+              position: 'absolute',
+              inset: 0,
+              width: s.value + '%',
+              transform: active ? 'scaleX(1)' : 'scaleX(0)',
+              transformOrigin: 'left center',
+              transition: reduceMotion ? 'none' : `transform 820ms cubic-bezier(0.16, 1, 0.3, 1) ${i * 100}ms`,
+              background: `linear-gradient(90deg, rgba(0,46,120,0.35), rgba(235,240,231,0.12))`,
               borderRight: '1px solid ' + T.hairStrong,
             }} />
           </div>
@@ -743,25 +929,31 @@ const Funnel = () => {
 
 const ProductStory = () => {
   const { ref: panelGridRef, live: panelsLive } = useRevealChildren({ threshold: 0.06 });
+  const reduceMotion = usePrefersReducedMotion();
+  const play = panelsLive;
   return (
-    <Section id="product" label="Product · instrument panel" title="One workspace to manage every coding agent."
+    <Section id="product" topBorder={false} label="Product · instrument panel" title="One workspace to manage every coding agent."
       sub="Routing, observability, human gates, isolation, and recap, built around how senior engineers actually ship.">
       <div ref={panelGridRef} className={`vmax-panel-grid${panelsLive ? ' vmax-panel-grid-live' : ''}`} style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
-      <InstrumentPanel tag="pipeline" title="Intent → plan → agents → verified" kpi="62%" kpiLabel="end-to-end pass rate, last 24h" delta="6.4">
-        <Funnel />
+      <InstrumentPanel tag="pipeline" title="Intent → plan → agents → verified" kpiLabel="end-to-end pass rate, last 24h" delta="6.4"
+        kpiCount={{ end: 62, decimals: 0, suffix: '%' }} active={play} reduceMotion={reduceMotion}>
+        <Funnel active={play} reduceMotion={reduceMotion} />
       </InstrumentPanel>
-      <InstrumentPanel tag="routing" title="Cross-agent routing by policy" kpi="318" kpiLabel="runs routed this week" delta="22.1">
+      <InstrumentPanel tag="routing" title="Cross-agent routing by policy" kpiLabel="runs routed this week" delta="22.1"
+        kpiCount={{ end: 318, decimals: 0, suffix: '' }} active={play} reduceMotion={reduceMotion}>
         <DonutChart segs={[
-          { label: 'claude', value: 142, color: 'rgba(255,255,255,0.85)' },
-          { label: 'codex', value: 98, color: 'rgba(255,255,255,0.45)' },
-          { label: 'cursor', value: 78, color: 'rgba(255,255,255,0.22)' },
-        ]} />
+          { label: 'claude', value: 142, color: '#EBF0E7' },
+          { label: 'codex', value: 98, color: '#002E78' },
+          { label: 'cursor', value: 78, color: 'rgba(235,240,231,0.35)' },
+        ]} active={play} reduceMotion={reduceMotion} />
       </InstrumentPanel>
-      <InstrumentPanel tag="throughput" title="Tasks shipped per engineer / day" kpi="11.4" kpiLabel="vs 6.2 without orchestration" delta="84">
-        <BarChart />
+      <InstrumentPanel tag="throughput" title="Tasks shipped per engineer / day" kpiLabel="vs 6.2 without orchestration" delta="84"
+        kpiCount={{ end: 11.4, decimals: 1, suffix: '' }} active={play} reduceMotion={reduceMotion}>
+        <BarChart active={play} reduceMotion={reduceMotion} />
       </InstrumentPanel>
-      <InstrumentPanel tag="cost" title="Model economics, auto-routed" kpi="$0.21" kpiLabel="avg cost per verified run" delta="38">
-        <Heatmap />
+      <InstrumentPanel tag="cost" title="Model economics, auto-routed" kpiLabel="avg cost per verified run" delta="38"
+        kpiCount={{ end: 0.21, decimals: 2, prefix: '$' }} active={play} reduceMotion={reduceMotion}>
+        <Heatmap active={play} reduceMotion={reduceMotion} />
       </InstrumentPanel>
     </div>
   </Section>
@@ -783,8 +975,8 @@ const FeatureCard = ({ title, body, accent, children, span = 1 }) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <Mono style={{ color: T.inkMute, textTransform: 'uppercase' }}>{accent}</Mono>
     </div>
-    <h3 style={{ margin: 0, fontFamily: T.sans, fontSize: 22, fontWeight: 500, letterSpacing: -0.5, color: T.ink, lineHeight: 1.15 }}>{title}</h3>
-    <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55, color: T.inkDim, fontFamily: T.sans, maxWidth: 460 }}>{body}</p>
+    <h3 style={{ margin: 0, fontFamily: T.sans, fontSize: fz(22), fontWeight: 500, letterSpacing: -0.5, color: T.ink, lineHeight: 1.15 }}>{title}</h3>
+    <p style={{ margin: 0, fontSize: fz(14), lineHeight: 1.55, color: T.inkDim, fontFamily: T.sans, maxWidth: 460 }}>{body}</p>
     <div style={{ flex: 1, marginTop: 8, minHeight: 100 }}>{children}</div>
   </div>
 );
@@ -824,7 +1016,7 @@ const VoiceWave = () => {
         <div style={{ flex: 1, display: 'flex', gap: 2, alignItems: 'center', height: 36 }}>
           {heights.map((h, i) => {
             const mu = reduceMotion ? (i / bars > 0.58 ? 0.15 : 1) : Math.max(0, Math.min(1, head - i + 0.65));
-            const fg = mu > 0.85 ? T.ink : `rgba(245,245,247,${0.08 + mu * 0.52})`;
+            const fg = mu > 0.85 ? T.ink : `rgba(235,240,231,${0.08 + mu * 0.52})`;
             return (
               <div key={i} style={{ flex: 1, height: h * 32 + 4, background: fg, borderRadius: 1 }} />
             );
@@ -832,13 +1024,13 @@ const VoiceWave = () => {
         </div>
         <Mono>{reduceMotion ? '0:14' : `0:${String((Math.floor(tick / 28)) % 20).padStart(2, '0')}`}</Mono>
       </div>
-      <div style={{ padding: 12, borderRadius: 8, border: '1px solid ' + T.hair, fontFamily: T.mono, fontSize: 12, color: T.inkDim, lineHeight: 1.55 }}>
+      <div style={{ padding: 12, borderRadius: 8, border: '1px solid ' + T.hair, fontFamily: T.mono, fontSize: fz(12), color: T.inkDim, lineHeight: 1.55 }}>
         <div style={{ marginBottom: 10 }}>
-          <Mono style={{ fontSize: 10, letterSpacing: 0.06, marginBottom: 4, display: 'block', color: T.inkFaint }}>YOU</Mono>
+          <Mono style={{ fontSize: fz(10), letterSpacing: 0.06, marginBottom: 4, display: 'block', color: T.inkFaint }}>YOU</Mono>
           <span style={{ color: T.ink }}>&quot;Ship the auth flow isolated on a branch, and have Codex run tests before we open the PR.&quot;</span>
         </div>
         <div style={{ borderTop: `1px solid ${T.hair}`, paddingTop: 10 }}>
-          <Mono style={{ fontSize: 10, letterSpacing: 0.06, marginBottom: 4, display: 'block', color: T.green }}>VMAX</Mono>
+          <Mono style={{ fontSize: fz(10), letterSpacing: 0.06, marginBottom: 4, display: 'block', color: T.green }}>VMAX</Mono>
           <span style={{ color: T.inkDim }}>&quot;Got it: feat branch, gated test run, PR after green. Anything else risky, migrations or prod keys?&quot;</span>
         </div>
       </div>
@@ -867,7 +1059,7 @@ const SessionList = () => {
           style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 90px 70px', gap: 12, padding: '12px 0', borderTop: '1px solid ' + T.hair, alignItems: 'center' }}
         >
           <div>
-            <div style={{ fontFamily: T.sans, fontSize: 13, color: T.ink }}>{s.name}</div>
+            <div style={{ fontFamily: T.sans, fontSize: fz(13), color: T.ink }}>{s.name}</div>
             <Mono style={{ color: T.inkMute }}>{s.repo} · {s.branch}</Mono>
           </div>
           <div style={{ display: 'flex', gap: 4 }}>
@@ -891,7 +1083,7 @@ const SessionList = () => {
 };
 
 const DiffPreview = () => (
-  <div style={{ fontFamily: T.mono, fontSize: 11.5, lineHeight: 1.6, border: '1px solid ' + T.hair, borderRadius: 8, padding: 14, color: T.inkDim }}>
+  <div style={{ fontFamily: T.mono, fontSize: fz(11.5), lineHeight: 1.6, border: '1px solid ' + T.hair, borderRadius: 8, padding: 14, color: T.inkDim }}>
     <div style={{ color: T.inkMute, marginBottom: 8 }}>diff · ios/App/Boot.swift</div>
     <div><span style={{ color: T.inkFaint }}>  </span>func application(launch:Launch) {'{'}</div>
     <div style={{ color: 'rgba(255,120,120,0.85)' }}>- &nbsp; await syncVehicleState()</div>
@@ -908,7 +1100,7 @@ const ApprovalCard = () => (
       <span style={{ width: 8, height: 8, borderRadius: 4, background: T.amber }} />
       <Mono style={{ color: T.ink, textTransform: 'uppercase' }}>approval required</Mono>
     </div>
-    <div style={{ fontFamily: T.sans, fontSize: 13, color: T.ink, lineHeight: 1.5, marginBottom: 12 }}>
+    <div style={{ fontFamily: T.sans, fontSize: fz(13), color: T.ink, lineHeight: 1.5, marginBottom: 12 }}>
       Codex wants to <span style={{ color: T.ink, background: 'rgba(216,179,117,0.12)', padding: '0 4px', borderRadius: 3 }}>git push --force-with-lease origin feat/auth-v2</span>.
       This rewrites 3 commits.
     </div>
@@ -935,7 +1127,7 @@ const Features = () => {
         <ApprovalCard />
       </FeatureCard>
       <FeatureCard span={2} accent="04 · isolation" title="Worktrees, not wreckage." body="Every run gets its own branch and worktree. Experiments stay quarantined until you promote them.">
-        <div style={{ fontFamily: T.mono, fontSize: 11.5, color: T.inkDim, lineHeight: 1.7 }}>
+        <div style={{ fontFamily: T.mono, fontSize: fz(11.5), color: T.inkDim, lineHeight: 1.7 }}>
           <div>~/code/culin/<span style={{ color: T.ink }}>main</span></div>
           <div style={{ paddingLeft: 14, color: T.inkMute }}>├ <span style={{ color: T.ink }}>.worktrees/auth-v2</span> <span style={{ color: T.green }}>● running</span></div>
           <div style={{ paddingLeft: 14, color: T.inkMute }}>├ <span style={{ color: T.ink }}>.worktrees/splash-perf</span> <span style={{ color: T.amber }}>● review</span></div>
@@ -974,18 +1166,18 @@ const Workflow = () => {
               transition: 'background 160ms',
             }}>
               <Mono style={{ color: active === i ? T.ink : T.inkFaint, display: 'block', marginBottom: 14 }}>{s.n}</Mono>
-              <div style={{ fontSize: 17, fontWeight: 500, letterSpacing: -0.3, color: active === i ? T.ink : T.inkDim }}>{s.t}</div>
-              <div style={{ marginTop: 4, fontSize: 12.5, color: active === i ? T.inkDim : T.inkMute, lineHeight: 1.4 }}>{s.sub}</div>
+              <div style={{ fontSize: fz(17), fontWeight: 500, letterSpacing: -0.3, color: active === i ? T.ink : T.inkDim }}>{s.t}</div>
+              <div style={{ marginTop: 4, fontSize: fz(12.5), color: active === i ? T.inkDim : T.inkMute, lineHeight: 1.4 }}>{s.sub}</div>
             </button>
           ))}
         </div>
         <div style={{ padding: '40px 32px', display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 48, alignItems: 'start' }}>
           <div>
             <Mono style={{ color: T.inkMute }}>STEP {steps[active].n}</Mono>
-            <h3 style={{ margin: '12px 0 16px', fontFamily: T.sans, fontSize: 34, fontWeight: 500, letterSpacing: -0.8, color: T.ink, lineHeight: 1.1 }}>{steps[active].t}.</h3>
-            <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6, color: T.inkDim, maxWidth: 380 }}>{steps[active].body}</p>
+            <h3 style={{ margin: '12px 0 16px', fontFamily: T.sans, fontSize: fz(34), fontWeight: 500, letterSpacing: -0.8, color: T.ink, lineHeight: 1.1 }}>{steps[active].t}.</h3>
+            <p style={{ margin: 0, fontSize: fz(15), lineHeight: 1.6, color: T.inkDim, maxWidth: 380 }}>{steps[active].body}</p>
           </div>
-          <div style={{ border: '1px solid ' + T.hair, borderRadius: 10, padding: 22, background: T.bg, minHeight: 240, fontFamily: T.mono, fontSize: 12, color: T.inkDim, lineHeight: 1.75 }}>
+          <div style={{ border: '1px solid ' + T.hair, borderRadius: 10, padding: 22, background: T.bg, minHeight: 240, fontFamily: T.mono, fontSize: fz(12), color: T.inkDim, lineHeight: 1.75 }}>
             {active === 0 && (<>
               <div style={{ color: T.inkMute }}>// captured 14s of voice</div>
               <div style={{ color: T.ink }}>{'>'} ship auth-v2 on a branch.</div>
@@ -1021,7 +1213,7 @@ const Workflow = () => {
               <div style={{ color: T.amber }}>⏸ paused for approval: pr_open</div>
             </>)}
             {active === 4 && (<>
-              <div style={{ color: T.inkMute }}># recap · run #4823</div>
+              <div style={{ color: T.inkMute }}># recap · ClaudeCodex_Run4823</div>
               <div>intent: auth v2, branch-isolated</div>
               <div>outcome: <span style={{ color: T.green }}>passed</span> (412/412)</div>
               <div>files: 8 changed · +312 -184</div>
@@ -1058,16 +1250,16 @@ const Pricing = () => {
             )}
             <div>
               <Mono style={{ color: T.inkMute, textTransform: 'uppercase' }}>{p.name}</Mono>
-              <div style={{ marginTop: 14, fontFamily: T.sans, fontSize: 42, fontWeight: 500, letterSpacing: -1.2, color: T.ink, lineHeight: 1, display: 'flex', alignItems: 'baseline', gap: 6 }}>
+              <div style={{ marginTop: 14, fontFamily: T.sans, fontSize: fz(42), fontWeight: 500, letterSpacing: -1.2, color: T.ink, lineHeight: 1, display: 'flex', alignItems: 'baseline', gap: 6 }}>
                 {p.price}
-                {p.unit && <span style={{ fontSize: 13, color: T.inkMute, fontFamily: T.sans, letterSpacing: -0.1, fontWeight: 400 }}>{p.unit}</span>}
+                {p.unit && <span style={{ fontSize: fz(13), color: T.inkMute, fontFamily: T.sans, letterSpacing: -0.1, fontWeight: 400 }}>{p.unit}</span>}
               </div>
-              <p style={{ margin: '14px 0 0', fontSize: 13.5, color: T.inkDim, lineHeight: 1.5 }}>{p.desc}</p>
+              <p style={{ margin: '14px 0 0', fontSize: fz(13.5), color: T.inkDim, lineHeight: 1.5 }}>{p.desc}</p>
             </div>
             <Btn variant={p.featured ? 'primary' : 'secondary'} size="md" {...(p.cta === 'Download' ? macDownloadBtnProps(MAC_DOWNLOAD_URL) : {})}>{p.cta} →</Btn>
             <div style={{ borderTop: '1px solid ' + T.hair, paddingTop: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
               {p.features.map(f => (
-                <div key={f} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 13, color: T.ink, fontFamily: T.sans }}>
+                <div key={f} style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: fz(13), color: T.ink, fontFamily: T.sans }}>
                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6L5 8.5L9.5 3.5" stroke={T.inkDim} strokeWidth="1.3" /></svg>
                   {f}
                 </div>
@@ -1087,17 +1279,19 @@ const CTA = () => {
   <section ref={ref} style={{ padding: '120px 0', borderTop: '1px solid ' + T.hair, position: 'relative', overflow: 'hidden', ...revealStyle }}>
     <div style={{
       position: 'absolute', inset: 0, opacity: 0.5, pointerEvents: 'none',
-      backgroundImage: `radial-gradient(circle at 50% 100%, rgba(255,255,255,0.06), transparent 60%)`,
+      backgroundImage: `radial-gradient(circle at 50% 100%, rgba(0, 46, 120, 0.18), transparent 60%)`,
     }} />
     <div style={{ maxWidth: 900, margin: '0 auto', padding: '0 32px', textAlign: 'center', position: 'relative' }}>
-      <h2 style={{ margin: 0, fontFamily: T.sans, fontSize: 64, fontWeight: 500, letterSpacing: -2.4, lineHeight: 1, color: T.ink }}>
+      <h2 style={{ margin: 0, fontFamily: T.sans, fontSize: fz(64), fontWeight: 500, letterSpacing: -2.4, lineHeight: 1, color: T.ink }}>
         Stop juggling tabs.<br /><span style={{ color: T.inkMute }}>Start orchestrating.</span>
       </h2>
-      <p style={{ margin: '28px auto 0', maxWidth: 520, fontSize: 16, lineHeight: 1.55, color: T.inkDim }}>
+      <p style={{ margin: '28px auto 0', maxWidth: 520, fontSize: fz(16), lineHeight: 1.55, color: T.inkDim }}>
         Vmax is in private beta. macOS only. Local-first. Bring your own API keys.
       </p>
       <div style={{ display: 'flex', gap: 12, marginTop: 36, justifyContent: 'center' }}>
-        <Btn variant="primary" size="lg" {...macDownloadBtnProps(MAC_DOWNLOAD_URL)}>Download for macOS</Btn>
+        <span className="vmax-rainbow-ring">
+          <Btn variant="primary" size="lg" {...macDownloadBtnProps(MAC_DOWNLOAD_URL)}>Download for macOS</Btn>
+        </span>
         <Btn variant="secondary" size="lg">Join the waitlist</Btn>
       </div>
     </div>
@@ -1109,10 +1303,10 @@ const Footer = () => {
   const { ref, revealStyle } = useReveal(0);
   return (
   <footer ref={ref} style={{ borderTop: '1px solid ' + T.hair, padding: '48px 0 36px', ...revealStyle }}>
-    <div style={{ maxWidth: 1240, margin: '0 auto', padding: '0 32px', display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr 1fr', gap: 40 }}>
+    <div style={{ maxWidth: CONTENT_MAX, margin: '0 auto', padding: '0 32px', display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr 1fr', gap: 40 }}>
       <div>
         <Logo />
-        <p style={{ margin: '16px 0 0', fontSize: 12.5, color: T.inkMute, lineHeight: 1.55, maxWidth: 280 }}>
+        <p style={{ margin: '16px 0 0', fontSize: fz(12.5), color: T.inkMute, lineHeight: 1.55, maxWidth: 280 }}>
           The operating system for coding agents. Built in San Francisco.
         </p>
       </div>
@@ -1133,7 +1327,7 @@ const Footer = () => {
                 key={i}
                 href={href}
                 {...(remote ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-                style={{ color: T.inkDim, textDecoration: 'none', fontSize: 13, fontFamily: T.sans }}
+                style={{ color: T.inkDim, textDecoration: 'none', fontSize: fz(13), fontFamily: T.sans }}
               >{i}</a>
               );
             })}
@@ -1141,11 +1335,11 @@ const Footer = () => {
         </div>
       ))}
     </div>
-    <div style={{ maxWidth: 1240, margin: '40px auto 0', padding: '20px 32px 0', borderTop: '1px solid ' + T.hair, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 20 }}>
+    <div style={{ maxWidth: CONTENT_MAX, margin: '40px auto 0', padding: '20px 32px 0', borderTop: '1px solid ' + T.hair, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 20 }}>
       <Mono style={{ color: T.inkFaint }}>© 2026 Vmax Labs, Inc. · v0.7.2 · build a4f9c1</Mono>
       <div style={{ display: 'flex', gap: 18 }}>
         {['github', 'x', 'discord'].map(s => (
-          <a key={s} href="#" style={{ color: T.inkMute, textDecoration: 'none', fontFamily: T.mono, fontSize: 11.5 }}>{s}</a>
+          <a key={s} href="#" style={{ color: T.inkMute, textDecoration: 'none', fontFamily: T.mono, fontSize: fz(11.5) }}>{s}</a>
         ))}
       </div>
     </div>

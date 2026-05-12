@@ -41,6 +41,7 @@ Return ONLY valid JSON with this exact shape (no prose outside the JSON):
 Rules for title:
 - Short, specific, and action-oriented (what to build or fix).
 - No vague titles like “Fix bug” or “Improve X” unless the image truly gives no specifics.
+- A teammate scanning the board should immediately see what code or product change is in scope.
 
 Rules for description (Markdown allowed):
 - **Context**: What is visible in the screenshot (product area, screens, identifiers if shown).
