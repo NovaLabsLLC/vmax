@@ -51,6 +51,7 @@ from ..services.linear_agent_brief import (
     generate_agent_brief_markdown,
     sync_agent_brief_to_linear,
 )
+from ..services.linear_issue_image_draft import draft_issue_from_image
 
 router = APIRouter()
 
@@ -168,6 +169,56 @@ async def create_issue(body: LinearIssueCreateBody = Body(...)) -> dict[str, Any
         title=str(title)[:120],
     )
     return {"issue": issue, "workspace_id": ws.id}
+
+
+class LinearIssueDraftFromImageBody(BaseModel):
+    """Raw base64 or ``data:image/...;base64,...``; validated strictly in ``draft_issue_from_image``."""
+
+    image_base64: str = Field(
+        ...,
+        min_length=1,
+        description="Base64-encoded screenshot (optional data-URL wrapper).",
+    )
+
+
+@router.post("/issue-draft-from-image")
+async def linear_issue_draft_from_image(body: LinearIssueDraftFromImageBody = Body(...)) -> dict[str, str]:
+    """Vision model proposes Linear ``title`` and ``description`` for the Add-task modal."""
+
+    image_size = len(body.image_base64 or "")
+
+    log_audit(
+        "linear_issue_draft_image",
+        ok=True,
+        phase="requested",
+        b64_chars=image_size,
+    )
+
+    try:
+        out = await draft_issue_from_image(image_base64=body.image_base64)
+    except HTTPException as err:
+        log_audit(
+            "linear_issue_draft_image",
+            ok=False,
+            phase="http_error",
+            status_code=err.status_code,
+            detail=str(err.detail),
+        )
+        raise
+    except Exception as err:
+        log_audit("linear_issue_draft_image", ok=False, phase="error", error=str(err))
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to draft Linear issue from image.",
+        ) from err
+
+    log_audit(
+        "linear_issue_draft_image",
+        ok=True,
+        phase="completed",
+        title_preview=(out.get("title") or "")[:80],
+    )
+    return {"title": out["title"], "description": out["description"]}
 
 
 @router.get("/issues/{issue_id}")

@@ -11,6 +11,8 @@ import { fetchLinearIssueAgentBrief } from "../utils/linearAgentBrief";
 import { listLinearWorkspaces, type LinearWorkspace } from "../utils/linearWorkspacesApi";
 import { createLinearIssue, fetchLinearTeams, type LinearTeamOption } from "../utils/linearIssueCreate";
 import { patchLinearIssue, moveLinearIssueToDone } from "../utils/linearIssuePatch";
+import { encodeImageFileAsJpegBase64 } from "../utils/imageToJpegBase64";
+import { draftLinearIssueFromImage } from "../utils/linearIssueDraftFromImage";
 
 type Props = {
   say: (text: string, tone?: Bubble["tone"]) => void;
@@ -89,6 +91,7 @@ export default function LinearIssuesStrip({
   const [createTitle, setCreateTitle] = useState("");
   const [createDesc, setCreateDesc] = useState("");
   const [assignToMe, setAssignToMe] = useState(true);
+  const [imageDraftBusy, setImageDraftBusy] = useState(false);
   /** Expanded = full strip; collapsed = slim header row only. */
   const [expanded, setExpanded] = useState<boolean>(() =>
     typeof window !== "undefined" ? readStoredExpanded() : true,
@@ -98,6 +101,9 @@ export default function LinearIssuesStrip({
   /** Wall/perf timestamp when agent-brief request started (`null` when idle). */
   const briefStartRef = useRef<number | null>(null);
   const createTitleInputRef = useRef<HTMLInputElement | null>(null);
+  const createImageFileRef = useRef<HTMLInputElement | null>(null);
+  /** Ignores overlapping fetchLinearTeams responses when workspace picker changes quickly. */
+  const teamsFetchGenRef = useRef(0);
   /** Edit existing issue (`null` when dialog closed). */
   const [editTarget, setEditTarget] = useState<LinearIssueRow | null>(null);
   const [editTitle, setEditTitle] = useState("");
@@ -108,9 +114,9 @@ export default function LinearIssuesStrip({
   const editTitleInputRef = useRef<HTMLInputElement | null>(null);
 
   const closeCreateModal = useCallback(() => {
-    if (createBusy) return;
+    if (createBusy || imageDraftBusy) return;
     setCreateOpen(false);
-  }, [createBusy]);
+  }, [createBusy, imageDraftBusy]);
 
   const closeEditModal = useCallback(() => {
     if (editBusy) return;
@@ -250,13 +256,16 @@ export default function LinearIssuesStrip({
   }, [loadAll]);
 
   const loadTeamsForCreate = useCallback(async (workspaceId: string | null) => {
+    const gen = ++teamsFetchGenRef.current;
     setCreateError(null);
     try {
       const out = await fetchLinearTeams(workspaceId || undefined);
+      if (gen !== teamsFetchGenRef.current) return;
       setTeams(out.teams || []);
       const first = out.teams?.[0];
       setCreateTeamId((first?.id || first?.key || "").trim());
     } catch (e) {
+      if (gen !== teamsFetchGenRef.current) return;
       setTeams([]);
       setCreateTeamId("");
       setCreateError(String((e as Error)?.message || e));
@@ -412,6 +421,41 @@ export default function LinearIssuesStrip({
     workspaces,
   ]);
 
+  const triggerImageDraftPicker = useCallback(() => {
+    createImageFileRef.current?.click();
+  }, []);
+
+  const onCreateImageDraftChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const inputEl = e.currentTarget;
+      const file = inputEl.files?.[0];
+      inputEl.value = "";
+      if (!file || createBusy || imageDraftBusy) return;
+      const mimeOk = /^image\/(jpeg|png)$/i.test(file.type);
+      const nameOk = /\.(jpe?g|png)$/i.test(file.name);
+      if (!mimeOk && !nameOk) {
+        say("Use a JPEG or PNG image.", "warn");
+        return;
+      }
+      setImageDraftBusy(true);
+      setCreateError(null);
+      try {
+        const b64 = await encodeImageFileAsJpegBase64(file);
+        const out = await draftLinearIssueFromImage(b64);
+        setCreateTitle((out.title || "").slice(0, 512));
+        setCreateDesc((out.description || "").slice(0, 50000));
+        say("Filled title and description from the image. Edit before creating.", "success");
+      } catch (err) {
+        const msg = String((err as Error)?.message || err);
+        setCreateError(msg);
+        say(msg, "warn");
+      } finally {
+        setImageDraftBusy(false);
+      }
+    },
+    [createBusy, imageDraftBusy, say],
+  );
+
   const showFilters = filterBuckets.length > 1;
 
   const createModal =
@@ -425,8 +469,8 @@ export default function LinearIssuesStrip({
         <button
           type="button"
           aria-label="Close"
-          disabled={createBusy}
-          className={`absolute inset-0 bg-black/[0.55] backdrop-blur-[2px] ${createBusy ? "cursor-default" : "cursor-pointer"}`}
+          disabled={createBusy || imageDraftBusy}
+          className={`absolute inset-0 bg-black/[0.55] backdrop-blur-[2px] ${createBusy || imageDraftBusy ? "cursor-default" : "cursor-pointer"}`}
           onClick={() => closeCreateModal()}
         />
         <div
@@ -451,7 +495,7 @@ export default function LinearIssuesStrip({
             </div>
             <button
               type="button"
-              disabled={createBusy}
+              disabled={createBusy || imageDraftBusy}
               aria-label="Close dialog"
               onClick={() => closeCreateModal()}
               className="shrink-0 rounded-lg border border-white/[0.12] bg-white/[0.06] hover:bg-white/[0.11]
@@ -477,7 +521,7 @@ export default function LinearIssuesStrip({
                   setCreateWorkspaceId(id);
                   void loadTeamsForCreate(id);
                 }}
-                disabled={createBusy}
+                disabled={createBusy || imageDraftBusy}
                 className="w-full text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white/88"
               >
                 {workspaces.map((w) => (
@@ -498,11 +542,33 @@ export default function LinearIssuesStrip({
               value={createTitle}
               onChange={(e) => setCreateTitle(e.target.value)}
               placeholder="Issue title"
-              disabled={createBusy}
+              disabled={createBusy || imageDraftBusy}
               maxLength={512}
               className="w-full text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white placeholder:text-white/35"
             />
           </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={createImageFileRef}
+              type="file"
+              accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+              hidden
+              onChange={(e) => void onCreateImageDraftChange(e)}
+            />
+            <button
+              type="button"
+              disabled={createBusy || imageDraftBusy}
+              title="JPEG or PNG: extract title and description with the vision model"
+              onClick={() => triggerImageDraftPicker()}
+              className="text-[11px] px-3 h-[28px] rounded-md bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/35 text-violet-100
+                         disabled:opacity-45 disabled:pointer-events-none transition-colors"
+            >
+              {imageDraftBusy ? "Reading image…" : "Fill from photo"}
+            </button>
+            <span className="text-[10px] text-white/38 leading-snug">
+              Uses backend vision (OpenAI / Anthropic). Does not create the issue until you tap Create.
+            </span>
+          </div>
           <label className="block space-y-1">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
               Description{" "}
@@ -512,7 +578,7 @@ export default function LinearIssuesStrip({
               value={createDesc}
               onChange={(e) => setCreateDesc(e.target.value)}
               placeholder="More context…"
-              disabled={createBusy}
+              disabled={createBusy || imageDraftBusy}
               rows={3}
               className="w-full resize-y min-h-[3.25rem] text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white placeholder:text-white/35 mono"
             />
@@ -524,7 +590,7 @@ export default function LinearIssuesStrip({
             <select
               value={createTeamId}
               onChange={(e) => setCreateTeamId(e.target.value)}
-              disabled={createBusy || teams.length === 0}
+              disabled={createBusy || imageDraftBusy || teams.length === 0}
               className="w-full text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white/88 mono"
             >
               {teams.length === 0 ? (
@@ -550,7 +616,7 @@ export default function LinearIssuesStrip({
               type="checkbox"
               className="rounded border-white/25 bg-transparent"
               checked={assignToMe}
-              disabled={createBusy}
+              disabled={createBusy || imageDraftBusy}
               onChange={(e) => setAssignToMe(e.target.checked)}
             />
             Assign to me
@@ -560,6 +626,7 @@ export default function LinearIssuesStrip({
               type="button"
               disabled={
                 createBusy ||
+                imageDraftBusy ||
                 !createTitle.trim() ||
                 !(`${createTeamId || ""}`.trim()) ||
                 teams.length === 0
@@ -571,7 +638,7 @@ export default function LinearIssuesStrip({
             </button>
             <button
               type="button"
-              disabled={createBusy}
+              disabled={createBusy || imageDraftBusy}
               onClick={() => closeCreateModal()}
               className="text-[11px] px-3 h-[28px] rounded-md bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.1] text-white/75 disabled:opacity-35"
             >

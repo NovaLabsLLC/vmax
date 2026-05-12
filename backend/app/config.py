@@ -27,6 +27,7 @@ class Settings:
     openai_model: str = "gpt-4o-mini"
     openai_model_text: str = "gpt-4o-mini"
     anthropic_model: str = "claude-sonnet-4-6"
+    vision_issue_model: str = "gpt-4o-mini"
 
     # Task planner uses the cheapest/fastest variants — kept on a separate
     # knob from the structured-response models so we can downgrade /v1/task
@@ -70,13 +71,20 @@ def _load() -> Settings:
     except ValueError:
         port = 8000
 
+    openai_model = (
+        os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+    )
+
     return Settings(
         openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip(),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", "").strip(),
         linear_api_key=os.environ.get("LINEAR_API_KEY", "").strip(),
-        openai_model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
+        openai_model=openai_model,
         openai_model_text=os.environ.get("OPENAI_MODEL_TEXT", "").strip() or "",
         anthropic_model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6").strip() or "claude-sonnet-4-6",
+        vision_issue_model=(
+            os.environ.get("VISION_ISSUE_MODEL", "").strip() or openai_model
+        ),
         openai_model_task=(
             os.environ.get("OPENAI_MODEL_TASK", "gpt-4o-mini").strip() or "gpt-4o-mini"
         ),

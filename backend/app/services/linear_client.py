@@ -686,21 +686,47 @@ async def list_teams_for_key(api_key: str, *, first: int = 250) -> list[dict[str
 
 
 async def resolve_team_uuid(api_key: str, team_key_or_id: str) -> str:
-    """Resolve Linear ``teamId`` from a UUID or short team ``key`` (e.g. ``EXE``)."""
+    """Resolve ``teamId`` using teams visible to this API key (never blindly trust a pasted UUID)."""
 
     raw = (team_key_or_id or "").strip()
     if not raw:
         raise LinearClientError("team_id is empty")
-    if _UUID_RE.fullmatch(raw):
-        return raw
+
     teams = await list_teams_for_key(api_key)
-    up = raw.upper()
+    if not teams:
+        raise LinearClientError(
+            "No Linear teams are visible to this API key. Create a team in Linear, "
+            "or regenerate a key with permission to access teams."
+        )
+
+    uuid_like = bool(_UUID_RE.fullmatch(raw))
+    needle = raw.lower()
+
+    # Match by canonical id returned from `/teams` (case-normalized UUID compare).
     for t in teams:
-        if (((t.get("key") or "")).strip().upper()) == up:
-            tid = t.get("id")
-            if isinstance(tid, str) and tid.strip():
-                return tid.strip()
-    raise LinearClientError(f"No team matches {raw!r} — try a Linear team key (e.g. EXE) or team UUID.")
+        tid = str(t.get("id") or "").strip()
+        if not tid:
+            continue
+        if uuid_like and needle == tid.lower():
+            return tid
+        if not uuid_like and tid == raw:
+            return tid
+
+    raw_key = raw.upper()
+    for t in teams:
+        ky = ((t.get("key") or "")).strip().upper()
+        if ky == raw_key:
+            tid = str(t.get("id") or "").strip()
+            if tid:
+                return tid
+
+    keys = sorted({(((tt.get("key") or "")).strip().upper()) for tt in teams if (tt.get("key") or "").strip()})
+    suffix = f" Known keys here: {', '.join(keys)}." if keys else ""
+
+    raise LinearClientError(
+        "That team is not listed for this connected workspace. "
+        "Re-open «Add Linear task» and choose Team again after the list refreshes." + suffix
+    )
 
 
 async def create_linear_issue_with_key(

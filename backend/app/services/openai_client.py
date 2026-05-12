@@ -101,6 +101,49 @@ async def call_chat_structured(
     return ((choices[0].get("message") or {}).get("content") or "").strip()
 
 
+async def call_chat_json_with_image(
+    *,
+    system: str,
+    user: str,
+    image_base64: str,
+    temperature: float = 0.35,
+    max_tokens: int = 1200,
+    model: str | None = None,
+) -> str:
+    """Single user turn with a JPEG screenshot; ``response_format: json_object``."""
+    key = _require_key()
+    msgs: list[dict[str, Any]] = [
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": _attach_screenshot(user, image_base64),
+        },
+    ]
+
+    body = {
+        "model": model or settings.openai_model,
+        "messages": msgs,
+        "response_format": {"type": "json_object"},
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
+        res = await client.post(
+            CHAT_URL,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json=body,
+        )
+    if res.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"OpenAI {res.status_code}: {res.text[:600]}")
+
+    payload = res.json()
+    choices = payload.get("choices") or []
+    if not choices:
+        return ""
+    return ((choices[0].get("message") or {}).get("content") or "").strip()
+
+
 async def call_chat_plaintext(
     *,
     system: str,

@@ -4,3 +4,6 @@ dist
 .DS_Store
 *.log
 /electron/assets/
+# Favicon copies (Vite buildStart syncs from electron/assets/logo.png)
+src/renderer/public/favicon.png
+vmax-site/public/favicon.png

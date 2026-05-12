@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useTweaks, TweaksPanel, TweakSection, TweakRadio } from './tweaks-panel.jsx'
-import logoImg from '../../electron/assets/logo.png'
+import logoImg from './assets/logo.png'
 
 /** Set `VITE_MAC_DOWNLOAD_URL` in `vmax-site/.env` (e.g. `https://.../your.dmg`) or `/downloads/Vmax-macos-arm64.dmg` with the file under `public/downloads/`. */
 const MAC_DOWNLOAD_URL = String(import.meta.env.VITE_MAC_DOWNLOAD_URL ?? '').trim()

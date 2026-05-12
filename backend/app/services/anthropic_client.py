@@ -28,6 +28,7 @@ async def call_messages_structured(
     system: str,
     turns: list[HistoryTurn],
     screenshot_base64: str | None,
+    screenshot_media_type: str = "image/jpeg",
     max_tokens: int = 2000,
     temperature: float | None = None,
     model: str | None = None,
@@ -46,7 +47,7 @@ async def call_messages_structured(
                     "type": "image",
                     "source": {
                         "type": "base64",
-                        "media_type": "image/jpeg",
+                        "media_type": screenshot_media_type,
                         "data": screenshot_base64,
                     },
                 }
