@@ -200,6 +200,129 @@ async def _draft_with_anthropic_vision(*, image_base64: str, media_type: str) ->
     return {"title": title, "description": description}
 
 
+_ISSUE_DRAFT_TRANSCRIPT_PROMPT = """
+You draft Linear issues from spoken or informal typed notes.
+
+Return ONLY valid JSON with this exact shape (no prose outside the JSON):
+{
+  "title": "...",
+  "description": "..."
+}
+
+Rules for title:
+- Short, specific, action-oriented / outcome-focused.
+
+Rules for description (Markdown allowed):
+- Context, repro steps if mentioned, acceptance criteria when inferable.
+- Do not invent URLs, ticket IDs, file paths, or stack traces unless the user said them verbatim.
+"""
+
+
+async def _draft_transcript_openai(*, transcript: str) -> dict[str, str]:
+    model = settings.openai_model_text or settings.openai_model
+    resp = await _get_async_openai().chat.completions.create(
+        model=model,
+        temperature=0.25,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You turn spoken engineering notes into Linear-ready "
+                    'issue drafts. Reply as one JSON object with keys exactly '
+                    '"title" and "description" (both non-empty strings).'
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    _ISSUE_DRAFT_TRANSCRIPT_PROMPT
+                    + "\n\n--- User notes ---\n"
+                    + transcript.strip()
+                ),
+            },
+        ],
+        response_format={"type": "json_object"},
+    )
+
+    raw = resp.choices[0].message.content or "{}"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as err:
+        raise HTTPException(status_code=502, detail="LLM returned invalid JSON.") from err
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="LLM returned invalid JSON.")
+
+    title, description = _coerce_title_description(data)
+    return {"title": title, "description": description}
+
+
+async def _draft_transcript_anthropic(*, transcript: str) -> dict[str, str]:
+    system = (
+        "You draft Linear issues from spoken notes for software teams. Reply "
+        'with one JSON object only: keys exactly "title" and "description" '
+        "(both non-empty strings)."
+    )
+    user_body = (
+        _ISSUE_DRAFT_TRANSCRIPT_PROMPT + "\n\n--- User notes ---\n" + transcript.strip()
+    )
+    raw = await anthropic_client.call_messages_structured(
+        system=system,
+        turns=[HistoryTurn(role="user", text=user_body)],
+        screenshot_base64=None,
+        max_tokens=2200,
+        temperature=0.25,
+    )
+
+    try:
+        data = _parse_relaxed_json(raw)
+    except (json.JSONDecodeError, ValueError) as err:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Issue draft model returned malformed JSON: {err}",
+        ) from err
+
+    title, description = _coerce_title_description(data)
+    return {"title": title, "description": description}
+
+
+async def draft_issue_from_transcript(*, transcript: str) -> dict[str, str]:
+    """LLM proposes Linear ``title`` + ``description`` from speech/chat notes."""
+
+    t = (transcript or "").strip()
+    if len(t) < 8:
+        raise HTTPException(status_code=400, detail="Transcript too short to draft an issue.")
+
+    if len(t) > 48_000:
+        t = t[:48_000] + "\n\n[truncated]"
+
+    if not settings.has_openai and not settings.has_anthropic:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Neither OPENAI_API_KEY nor ANTHROPIC_API_KEY is configured "
+                "on the backend. Set one in backend/.env and restart."
+            ),
+        )
+
+    prefer_anthropic = settings.has_anthropic and not settings.has_openai
+
+    try:
+        if prefer_anthropic:
+            return await _draft_transcript_anthropic(transcript=t)
+        return await _draft_transcript_openai(transcript=t)
+    except HTTPException:
+        raise
+    except RuntimeError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "OpenAI credentials are unavailable. Set OPENAI_API_KEY "
+                "or configure ANTHROPIC_API_KEY for transcript drafting."
+            ),
+        ) from None
+
+
 async def draft_issue_from_image(*, image_base64: str) -> dict[str, str]:
     """Validate base64 screenshot and return ``title`` + ``description`` for Linear."""
 

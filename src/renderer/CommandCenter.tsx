@@ -16,6 +16,7 @@ export default function CommandCenter() {
 
   /** Voice routed from overlay → forwarded to Workspace Ask (epoch bumps effect). */
   const [voiceFromPill, setVoiceFromPill] = useState<{ text: string; epoch: number } | null>(null);
+  const [linearDraftFromPill, setLinearDraftFromPill] = useState<{ text: string; epoch: number } | null>(null);
   /** Active Workspace chat persisted in exec-sessions.json; drives sidebar + hydration. */
   const [workspaceSessionId, setWorkspaceSessionId] = useState<string | null>(null);
 
@@ -42,10 +43,17 @@ export default function CommandCenter() {
       setPage("workspace");
       setVoiceFromPill({ text: t, epoch: Date.now() });
     });
+    const offLinearDraft = window.exec.onPillLinearDraft((text) => {
+      const t = String(text || "").trim();
+      if (!t) return;
+      setPage("workspace");
+      setLinearDraftFromPill({ text: t, epoch: Date.now() });
+    });
     return () => {
       offNav();
       offVm();
       offVoice();
+      offLinearDraft();
     };
   }, []);
 
@@ -81,6 +89,8 @@ export default function CommandCenter() {
             <WorkspacePanel
               pendingVoiceQuestion={voiceFromPill}
               onConsumeVoiceQuestion={() => setVoiceFromPill(null)}
+              pendingLinearDraft={linearDraftFromPill}
+              onConsumeLinearDraft={() => setLinearDraftFromPill(null)}
               activeSessionId={workspaceSessionId}
               onSessionChange={setWorkspaceSessionId}
               registerVmaxPanelExecutor={(dispatcher) => {

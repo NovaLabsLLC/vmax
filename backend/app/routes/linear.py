@@ -51,7 +51,7 @@ from ..services.linear_agent_brief import (
     generate_agent_brief_markdown,
     sync_agent_brief_to_linear,
 )
-from ..services.linear_issue_image_draft import draft_issue_from_image
+from ..services.linear_issue_image_draft import draft_issue_from_image, draft_issue_from_transcript
 
 router = APIRouter()
 
@@ -179,6 +179,58 @@ class LinearIssueDraftFromImageBody(BaseModel):
         min_length=1,
         description="Base64-encoded screenshot (optional data-URL wrapper).",
     )
+
+
+class LinearIssueDraftFromTranscriptBody(BaseModel):
+    """Voice pill / overlay chat transcript → Linear ``title`` + ``description`` draft."""
+
+    transcript: str = Field(
+        ...,
+        min_length=1,
+        description="Spoken or typed notes describing the engineering task.",
+    )
+
+
+@router.post("/issue-draft-from-transcript")
+async def linear_issue_draft_from_transcript(
+    body: LinearIssueDraftFromTranscriptBody = Body(...),
+) -> dict[str, str]:
+    """Turn informal speech/text into Title + Description for Add Linear task."""
+
+    raw_len = len((body.transcript or "").strip())
+
+    log_audit(
+        "linear_issue_draft_transcript",
+        ok=True,
+        phase="requested",
+        transcript_chars=raw_len,
+    )
+
+    try:
+        out = await draft_issue_from_transcript(transcript=body.transcript)
+    except HTTPException as err:
+        log_audit(
+            "linear_issue_draft_transcript",
+            ok=False,
+            phase="http_error",
+            status_code=err.status_code,
+            detail=str(err.detail),
+        )
+        raise
+    except Exception as err:
+        log_audit("linear_issue_draft_transcript", ok=False, phase="error", error=str(err))
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to draft Linear issue from transcript.",
+        ) from err
+
+    log_audit(
+        "linear_issue_draft_transcript",
+        ok=True,
+        phase="completed",
+        title_preview=(out.get("title") or "")[:80],
+    )
+    return {"title": out["title"], "description": out["description"]}
 
 
 @router.post("/issue-draft-from-image")

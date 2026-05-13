@@ -22,6 +22,9 @@ type WorkspaceSayTone = "info" | "warn" | "success";
 type Props = {
   pendingVoiceQuestion?: { text: string; epoch: number } | null;
   onConsumeVoiceQuestion?: () => void;
+  /** Pill / overlay → open Add Linear task with AI-filled fields. */
+  pendingLinearDraft?: { text: string; epoch: number } | null;
+  onConsumeLinearDraft?: () => void;
   getScreenshot?: () => string | null;
   screenStatus?: "idle" | "requesting" | "granted" | "denied";
   onStartScreen?: () => void;
@@ -36,6 +39,8 @@ type Props = {
 export default function WorkspacePanel({
   pendingVoiceQuestion,
   onConsumeVoiceQuestion,
+  pendingLinearDraft,
+  onConsumeLinearDraft,
   getScreenshot,
   screenStatus,
   onStartScreen,
@@ -1214,6 +1219,8 @@ export default function WorkspacePanel({
         onBriefReadySendToCursor={(text) => {
           void sendToCursor(text);
         }}
+        voiceDraftFromPill={pendingLinearDraft}
+        onConsumeVoiceDraftFromPill={onConsumeLinearDraft}
       />
       {resolvedLinearIssueId ? (
         <div

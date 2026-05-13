@@ -251,6 +251,7 @@ const Section = ({ id, label, title, sub, children, pad = '120px 0', topBorder =
 
 // ---------------- Logo ----------------
 const Logo = ({ size = 44, wordmarkOpen = true }) => {
+  const imgMaxW = Math.round(size * (wordmarkOpen ? 2.85 : 5.25));
   return (
     <div
       className="vmax-nav-logo-inner"
@@ -267,7 +268,7 @@ const Logo = ({ size = 44, wordmarkOpen = true }) => {
           style={{
             height: size,
             maxHeight: size,
-            maxWidth: Math.round(size * 2.85),
+            maxWidth: imgMaxW,
           }}
           draggable={false}
           decoding="async"
@@ -326,94 +327,46 @@ function NavMacDownloadBadge() {
 }
 
 // ---------------- Nav ----------------
-const NAV_ITEMS = [
-  { href: '#product', label: 'Product' },
-  { href: '#features', label: 'Capabilities' },
-  { href: '#workflow', label: 'Workflow' },
-  { href: '#pricing', label: 'Pricing' },
-];
-
 const Nav = () => {
   const [scrolled, setScrolled] = useState(false);
-  const [hoverNearCenter, setHoverNearCenter] = useState(false);
   const { ref, revealStyle } = useReveal(0, { lift: false });
 
   useEffect(() => {
-    const onS = () => {
-      const s = window.scrollY > 8;
-      setScrolled(s);
-      if (!s) setHoverNearCenter(false);
-    };
+    const onS = () => setScrolled(window.scrollY > 8);
     onS();
     window.addEventListener('scroll', onS, { passive: true });
     return () => window.removeEventListener('scroll', onS);
   }, []);
 
-  const navWordmarkOpen = !scrolled || hoverNearCenter;
-  const navLogoSize = scrolled && !hoverNearCenter ? 40 : 44;
+  /** Larger mark in header; shrinks slightly once user scrolls (CSS + size transition). */
+  const navLogoSize = scrolled ? 56 : 80;
 
-  const onHeaderMouseMove = (e) => {
-    if (!scrolled) {
-      if (hoverNearCenter) setHoverNearCenter(false);
-      return;
-    }
-    const cx = window.innerWidth / 2;
-    const w = window.innerWidth;
-    const dist = Math.abs(e.clientX - cx);
-    const enter = Math.min(200, w * 0.28);
-    const leave = Math.max(48, enter - 36);
-    if (hoverNearCenter) {
-      if (dist > leave) setHoverNearCenter(false);
-    } else if (dist <= enter) {
-      setHoverNearCenter(true);
-    }
-  };
+  const navMotion =
+    typeof revealStyle.transition === 'string'
+      ? `${revealStyle.transition}, var(--vmax-nav-header-motion)`
+      : 'var(--vmax-nav-header-motion)';
 
-  const navBgTransition = 'background 220ms ease-out, backdrop-filter 220ms ease-out';
   return (
     <header
       ref={ref}
-      onMouseMove={onHeaderMouseMove}
-      onMouseLeave={() => setHoverNearCenter(false)}
+      className={'vmax-nav-header' + (scrolled ? ' vmax-nav-header--scrolled' : '')}
       style={{
       position: 'sticky', top: 0, zIndex: 50,
-      background: scrolled ? 'rgba(1, 9, 22, 0.88)' : 'transparent',
-      backdropFilter: scrolled ? 'blur(20px) saturate(140%)' : 'none',
-      borderBottom: scrolled ? '1px solid rgba(235, 240, 231, 0.07)' : '1px solid transparent',
+      background: scrolled ? 'rgba(1, 9, 22, 0.92)' : 'transparent',
+      backdropFilter: scrolled ? 'blur(24px) saturate(155%)' : 'none',
+      borderBottom: scrolled ? '1px solid rgba(235, 240, 231, 0.08)' : '1px solid transparent',
       ...revealStyle,
-      transition: revealStyle.transition
-        ? `${revealStyle.transition}, ${navBgTransition}, border-color 220ms ease-out`
-        : `${navBgTransition}, border-color 220ms ease-out`,
+      transition: navMotion,
     }}>
       <div className={'vmax-nav-shell' + (scrolled ? ' vmax-nav-shell--scrolled' : '')} style={{
         maxWidth: CONTENT_MAX,
         margin: '0 auto',
-        padding: '14px 32px',
-        minHeight: 56,
+        padding: scrolled ? '10px 32px' : '22px 32px',
+        minHeight: scrolled ? 52 : 72,
       }}>
-        <a href="#" className="vmax-nav-logo" style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none', color: 'inherit', minWidth: 0, maxWidth: '100%', overflow: 'hidden' }} aria-label="Vmax home">
-          <Logo wordmarkOpen={navWordmarkOpen} size={navLogoSize} />
+        <a href="#" className="vmax-nav-logo vmax-nav-logo--solo" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none', color: 'inherit', minWidth: 0, maxWidth: '100%', overflow: 'hidden' }} aria-label="Home">
+          <Logo wordmarkOpen={false} size={navLogoSize} />
         </a>
-        {!scrolled ? (
-          <>
-        <nav style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 2,
-          minWidth: 0,
-          flexWrap: 'wrap',
-          justifySelf: 'stretch',
-        }} aria-label="Sections">
-          {NAV_ITEMS.map(({ href, label }) => (
-            <a key={href} href={href} className="vmax-nav-link">{label}</a>
-          ))}
-        </nav>
-        <div className="vmax-nav-download-wrap" style={{ display: 'flex', alignItems: 'center', gap: 10, justifySelf: 'end', flexShrink: 0 }}>
-          <NavMacDownloadBadge />
-        </div>
-          </>
-        ) : null}
       </div>
     </header>
   );

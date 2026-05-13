@@ -64,6 +64,7 @@ function register() {
   ipcMain.handle("pill:interrupt-speech", () => sendToCommandCenter("pill:interrupt-speech"));
   ipcMain.handle("pill:transcript", (_evt, text) => sendToCommandCenter("pill:transcript", text));
   ipcMain.handle("pill:voice-question", (_evt, text) => sendToCommandCenter("pill:voice-question", text));
+  ipcMain.handle("pill:linear-draft", (_evt, text) => sendToCommandCenter("pill:linear-draft", text));
   ipcMain.handle("pill:request-cursor", () => sendToCommandCenter("pill:request-cursor"));
   ipcMain.handle("pill:toggle-screen", () => sendToCommandCenter("pill:toggle-screen"));
   ipcMain.handle("workspace:status", (_evt, status) => sendToOverlay("workspace:status", status));

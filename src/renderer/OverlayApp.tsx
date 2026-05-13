@@ -7,6 +7,7 @@ import { useScreen } from "./hooks/useScreen";
 import { formatRepoContextSummary } from "./utils/repoContextSummary";
 import { subscribeSettingsUpdated } from "./utils/subscribeSettingsUpdated";
 import { dispatchPayloadFromSplits, splitAgentsForPrompt } from "./utils/splitAgents";
+import { isLinearDraftVoiceIntent } from "./utils/linearDraftVoiceIntent";
 import type { AgentStatusEvent, VmaxOverlayBroadcast, VmaxPanelPayload } from "./types";
 
 /** Resize the pill window; prefers `overlay:set-bounds`, falls back if main predates that handler. */
@@ -240,6 +241,13 @@ export default function OverlayApp() {
       const { text } = await window.exec.transcribe(result);
       const clean = (text || "").trim();
       if (!clean) return;
+
+      if (typeof window.exec.pillLinearDraft === "function" && isLinearDraftVoiceIntent(clean)) {
+        await window.exec.focusCommandCenter({ view: "workspace" });
+        await window.exec.pillLinearDraft(clean);
+        return;
+      }
+
       // Fan-out: backend splitter → 0 (heuristic router), 1 (forced agent +
       // slice prompt), or ≥2 parallel agentPrompts.
       if (typeof window.exec.dispatch === "function") {
@@ -252,6 +260,11 @@ export default function OverlayApp() {
         const res = await window.exec.dispatch(dispatchPayloadFromSplits(clean, splits));
         if (!res?.ok && res?.error) setDispatchError(res.error);
       } else {
+        if (typeof window.exec.pillLinearDraft === "function" && isLinearDraftVoiceIntent(clean)) {
+          await window.exec.focusCommandCenter({ view: "workspace" });
+          await window.exec.pillLinearDraft(clean);
+          return;
+        }
         await window.exec.pillVoiceQuestion(clean);
       }
     } catch (err) {

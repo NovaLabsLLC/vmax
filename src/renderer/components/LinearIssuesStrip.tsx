@@ -13,6 +13,9 @@ import { createLinearIssue, fetchLinearTeams, type LinearTeamOption } from "../u
 import { patchLinearIssue, moveLinearIssueToDone } from "../utils/linearIssuePatch";
 import { encodeImageFileAsJpegBase64 } from "../utils/imageToJpegBase64";
 import { draftLinearIssueFromImage } from "../utils/linearIssueDraftFromImage";
+import { draftLinearIssueFromTranscript } from "../utils/linearIssueDraftFromTranscript";
+import { normalizeLinearDraftTranscript } from "../utils/linearDraftVoiceIntent";
+import { useVoiceCapture } from "../hooks/useVoiceCapture";
 
 type Props = {
   say: (text: string, tone?: Bubble["tone"]) => void;
@@ -25,6 +28,9 @@ type Props = {
    * After `/agent-brief` succeeds — typically open Cursor with the enriched task text (Workspace wires this).
    */
   onBriefReadySendToCursor?: (enrichedTaskText: string) => void | Promise<void>;
+  /** Overlay mic/chat → Command Center opens Add task + drafts via `/issue-draft-from-transcript`. */
+  voiceDraftFromPill?: { text: string; epoch: number } | null;
+  onConsumeVoiceDraftFromPill?: () => void;
 };
 
 type WsBucket = { key: string; label: string; count: number };
@@ -68,6 +74,8 @@ export default function LinearIssuesStrip({
   onFillTask,
   onLinearIssueFocus,
   onBriefReadySendToCursor,
+  voiceDraftFromPill,
+  onConsumeVoiceDraftFromPill,
 }: Props) {
   const [rows, setRows] = useState<LinearIssueRow[]>([]);
   const [meta, setMeta] = useState<FetchLinearIssuesResult["workspaces"]>([]);
@@ -92,6 +100,15 @@ export default function LinearIssuesStrip({
   const [createDesc, setCreateDesc] = useState("");
   const [assignToMe, setAssignToMe] = useState(true);
   const [imageDraftBusy, setImageDraftBusy] = useState(false);
+  const [speechDraftBusy, setSpeechDraftBusy] = useState(false);
+  /** Mic in Add-task modal → transcribe → AI draft. */
+  const [modalTalkDraftBusy, setModalTalkDraftBusy] = useState(false);
+
+  const linearVoice = useVoiceCapture();
+
+  /** Disable editing while AI drafts, mic active, or issue is posting to Linear. */
+  const createFieldsLocked =
+    createBusy || imageDraftBusy || speechDraftBusy || modalTalkDraftBusy || linearVoice.state !== "idle";
   /** Expanded = full strip; collapsed = slim header row only. */
   const [expanded, setExpanded] = useState<boolean>(() =>
     typeof window !== "undefined" ? readStoredExpanded() : true,
@@ -114,9 +131,9 @@ export default function LinearIssuesStrip({
   const editTitleInputRef = useRef<HTMLInputElement | null>(null);
 
   const closeCreateModal = useCallback(() => {
-    if (createBusy || imageDraftBusy) return;
+    if (createBusy) return;
     setCreateOpen(false);
-  }, [createBusy, imageDraftBusy]);
+  }, [createBusy]);
 
   const closeEditModal = useCallback(() => {
     if (editBusy) return;
@@ -314,6 +331,34 @@ export default function LinearIssuesStrip({
   }, [createOpen]);
 
   useEffect(() => {
+    if (!voiceDraftFromPill?.text?.trim()) return;
+    const raw = voiceDraftFromPill.text.trim();
+    onConsumeVoiceDraftFromPill?.();
+    void (async () => {
+      const transcript = normalizeLinearDraftTranscript(raw);
+      if (!transcript) return;
+      setCreateOpen(true);
+      setCreateError(null);
+      setSpeechDraftBusy(true);
+      try {
+        const out = await draftLinearIssueFromTranscript(transcript);
+        setCreateTitle((out.title || "").slice(0, 512));
+        setCreateDesc((out.description || "").slice(0, 50000));
+        say(
+          "Drafted Title and Description from what you said. Pick team and tap Create in Linear.",
+          "success",
+        );
+      } catch (err) {
+        const msg = String((err as Error)?.message || err);
+        setCreateError(msg);
+        say(msg, "warn");
+      } finally {
+        setSpeechDraftBusy(false);
+      }
+    })();
+  }, [voiceDraftFromPill?.epoch, onConsumeVoiceDraftFromPill, say]);
+
+  useEffect(() => {
     if (!editTarget) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") closeEditModal();
@@ -430,7 +475,7 @@ export default function LinearIssuesStrip({
       const inputEl = e.currentTarget;
       const file = inputEl.files?.[0];
       inputEl.value = "";
-      if (!file || createBusy || imageDraftBusy) return;
+      if (!file || createFieldsLocked) return;
       const mimeOk = /^image\/(jpeg|png)$/i.test(file.type);
       const nameOk = /\.(jpe?g|png)$/i.test(file.name);
       if (!mimeOk && !nameOk) {
@@ -456,8 +501,47 @@ export default function LinearIssuesStrip({
         setImageDraftBusy(false);
       }
     },
-    [createBusy, imageDraftBusy, say],
+    [createFieldsLocked, say],
   );
+
+  async function runTalkToDraftIssue() {
+    if (
+      linearVoice.state !== "idle" ||
+      modalTalkDraftBusy ||
+      createBusy ||
+      imageDraftBusy ||
+      speechDraftBusy
+    ) {
+      return;
+    }
+    setCreateError(null);
+    try {
+      const result = await linearVoice.start({ silenceMs: 1200, maxMs: 20000, threshold: 0.028 });
+      if (!result) return;
+      setModalTalkDraftBusy(true);
+      const { text } = await window.exec.transcribe(result);
+      const raw = (text || "").trim();
+      if (!raw) {
+        say("Didn't catch that — try again.", "warn");
+        return;
+      }
+      const transcript = normalizeLinearDraftTranscript(raw) || raw;
+      if (transcript.length < 8) {
+        say("Say a bit more — what should change or what's broken?", "warn");
+        return;
+      }
+      const out = await draftLinearIssueFromTranscript(transcript);
+      setCreateTitle((out.title || "").slice(0, 512));
+      setCreateDesc((out.description || "").slice(0, 50000));
+      say("Drafted Title and Description from your voice. Pick team, then Create in Linear.", "success");
+    } catch (err) {
+      const msg = String((err as Error)?.message || err);
+      setCreateError(msg);
+      say(msg, "warn");
+    } finally {
+      setModalTalkDraftBusy(false);
+    }
+  }
 
   const showFilters = filterBuckets.length > 1;
 
@@ -472,19 +556,20 @@ export default function LinearIssuesStrip({
         <button
           type="button"
           aria-label="Close"
-          disabled={createBusy || imageDraftBusy}
-          className={`absolute inset-0 bg-black/[0.55] backdrop-blur-[2px] ${createBusy || imageDraftBusy ? "cursor-default" : "cursor-pointer"}`}
+          disabled={createBusy}
+          className={`absolute inset-0 bg-black/[0.55] backdrop-blur-[2px] ${createBusy ? "cursor-default" : "cursor-pointer"}`}
           onClick={() => closeCreateModal()}
         />
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="linear-add-task-heading"
-          aria-busy={imageDraftBusy}
-          className="relative z-[1001] w-full max-w-lg max-h-[min(90vh,40rem)] overflow-y-auto rounded-2xl border border-white/[0.12]
-                     bg-[#0e0e12]/95 shadow-[0_24px_80px_-24px_rgba(0,0,0,0.85)] p-4 sm:p-5 space-y-3"
+          aria-busy={imageDraftBusy || speechDraftBusy || createBusy}
+          className="relative z-[1001] flex flex-col w-full max-w-lg max-h-[min(90vh,40rem)] overflow-hidden rounded-2xl border border-white/[0.12]
+                     bg-[#0e0e12]/95 shadow-[0_24px_80px_-24px_rgba(0,0,0,0.85)]"
           onMouseDown={(e) => e.stopPropagation()}
         >
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5 space-y-3">
           <div className="flex items-start gap-3">
             <div className="min-w-0 flex-1">
               <h2
@@ -494,14 +579,14 @@ export default function LinearIssuesStrip({
                 Add Linear task
               </h2>
               <p className="text-[11px] text-white/45 mt-0.5 leading-snug">
-                Uses your Linear workspace from Settings. Type below, or upload a screenshot and AI fills title +
-                description—you still choose team and tap Create; nothing is filed until then. ESC or backdrop to
+                Uses your Linear workspace from Settings. Type below, use the mic from the overlay (“create a Linear task …”), upload a screenshot, or prefix chat with{" "}
+                <span className="text-white/55">linear:</span> — AI fills Title + Description; you pick Team and tap Create; nothing is filed until then. ESC or backdrop to
                 dismiss.
               </p>
             </div>
             <button
               type="button"
-              disabled={createBusy || imageDraftBusy}
+              disabled={createBusy}
               aria-label="Close dialog"
               onClick={() => closeCreateModal()}
               className="shrink-0 rounded-lg border border-white/[0.12] bg-white/[0.06] hover:bg-white/[0.11]
@@ -527,7 +612,7 @@ export default function LinearIssuesStrip({
                   setCreateWorkspaceId(id);
                   void loadTeamsForCreate(id);
                 }}
-                disabled={createBusy || imageDraftBusy}
+                disabled={createFieldsLocked}
                 className="w-full text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white/88"
               >
                 {workspaces.map((w) => (
@@ -547,41 +632,26 @@ export default function LinearIssuesStrip({
               type="text"
               value={createTitle}
               onChange={(e) => setCreateTitle(e.target.value)}
-              placeholder="Short issue title (or draft from screenshot below)"
-              disabled={createBusy || imageDraftBusy}
+              placeholder="Short issue title — or draft with Voice / Pic below"
+              disabled={createFieldsLocked}
               maxLength={512}
               className="w-full text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white placeholder:text-white/35"
             />
           </label>
-          <div className="rounded-lg border border-violet-400/20 bg-violet-500/[0.06] p-2.5 space-y-2">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-violet-200/75">
-              Draft from screenshot (AI)
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                ref={createImageFileRef}
-                type="file"
-                accept="image/jpeg,image/png,.jpg,.jpeg,.png"
-                hidden
-                onChange={(e) => void onCreateImageDraftChange(e)}
-              />
-              <button
-                type="button"
-                disabled={createBusy || imageDraftBusy}
-                title="Pick a JPEG or PNG screenshot; AI writes Title and Description for you to edit"
-                aria-describedby="linear-draft-from-image-help"
-                onClick={() => triggerImageDraftPicker()}
-                className="text-[11px] px-3 h-[28px] rounded-md bg-violet-500/25 hover:bg-violet-500/35 border border-violet-400/40 text-violet-50
-                           disabled:opacity-45 disabled:pointer-events-none transition-colors"
-              >
-                {imageDraftBusy ? "Analyzing screenshot…" : "Choose screenshot → draft fields"}
-              </button>
-            </div>
-            <p id="linear-draft-from-image-help" className="text-[10px] text-white/45 leading-snug">
-              Vision reads bugs, UI, errors, or sketches and proposes a coding-ready issue. Only fills Title +
-              Description—pick Team below, then tap <span className="text-emerald-200/90">Create in Linear</span> to file
-              it.
-            </p>
+          <div className="space-y-1.5">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-white/38">
+              AI draft
+            </span>
+            <LinearAiDraftToolbar
+              variant="modal"
+              locked={createFieldsLocked}
+              linearVoice={linearVoice}
+              modalTalkDraftBusy={modalTalkDraftBusy}
+              imageDraftBusy={imageDraftBusy}
+              onTalk={() => void runTalkToDraftIssue()}
+              onCancelMic={() => linearVoice.cancel()}
+              onScreenshot={() => triggerImageDraftPicker()}
+            />
           </div>
           <label className="block space-y-1">
             <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
@@ -592,7 +662,7 @@ export default function LinearIssuesStrip({
               value={createDesc}
               onChange={(e) => setCreateDesc(e.target.value)}
               placeholder="Context, repro steps, acceptance criteria—or leave blank until AI drafts from a screenshot"
-              disabled={createBusy || imageDraftBusy}
+              disabled={createFieldsLocked}
               rows={3}
               className="w-full resize-y min-h-[3.25rem] text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white placeholder:text-white/35 mono"
             />
@@ -604,7 +674,7 @@ export default function LinearIssuesStrip({
             <select
               value={createTeamId}
               onChange={(e) => setCreateTeamId(e.target.value)}
-              disabled={createBusy || imageDraftBusy || teams.length === 0}
+              disabled={createFieldsLocked || teams.length === 0}
               className="w-full text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white/88 mono"
             >
               {teams.length === 0 ? (
@@ -630,36 +700,40 @@ export default function LinearIssuesStrip({
               type="checkbox"
               className="rounded border-white/25 bg-transparent"
               checked={assignToMe}
-              disabled={createBusy || imageDraftBusy}
+              disabled={createFieldsLocked}
               onChange={(e) => setAssignToMe(e.target.checked)}
             />
             Assign to me
           </label>
-          <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-white/[0.06]">
-            <button
-              type="button"
-              disabled={
-                createBusy ||
-                imageDraftBusy ||
-                !createTitle.trim() ||
-                !(`${createTeamId || ""}`.trim()) ||
-                teams.length === 0
-              }
-              onClick={() => void submitCreate()}
-              className="text-[11px] px-3 h-[28px] rounded-md bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/35 text-emerald-100 disabled:opacity-45 disabled:pointer-events-none"
-            >
-              {createBusy ? "Creating…" : "Create in Linear"}
-            </button>
-            <button
-              type="button"
-              disabled={createBusy || imageDraftBusy}
-              onClick={() => closeCreateModal()}
-              className="text-[11px] px-3 h-[28px] rounded-md bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.1] text-white/75 disabled:opacity-35"
-            >
-              Cancel
-            </button>
           </div>
-          <p className="text-[10px] text-white/38">Uses Linear keys from Settings. Backend must be running.</p>
+
+          <div className="shrink-0 border-t border-white/[0.1] px-4 sm:px-5 py-3 bg-[#0c0c10]/98 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={
+                  createFieldsLocked ||
+                  !createTitle.trim() ||
+                  !(`${createTeamId || ""}`.trim()) ||
+                  teams.length === 0
+                }
+                onClick={() => void submitCreate()}
+                className="text-[11px] px-3 h-[28px] rounded-md bg-emerald-500/35 hover:bg-emerald-500/45 border border-emerald-400/50 text-emerald-50 font-medium
+                           disabled:opacity-45 disabled:pointer-events-none shadow-[0_0_0_1px_rgba(16,185,129,0.12)]"
+              >
+                {createBusy ? "Creating…" : "Create in Linear"}
+              </button>
+              <button
+                type="button"
+                disabled={createBusy}
+                onClick={() => closeCreateModal()}
+                className="text-[11px] px-3 h-[28px] rounded-md bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.18] text-white/90 disabled:opacity-35 disabled:pointer-events-none"
+              >
+                Cancel
+              </button>
+            </div>
+            <p className="text-[10px] text-white/38">Uses Linear keys from Settings. Backend must be running.</p>
+          </div>
         </div>
       </div>,
       document.body,
@@ -787,62 +861,92 @@ export default function LinearIssuesStrip({
 
   return (
     <>
-      <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-3 space-y-2 w-full">
-        <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
-        <div className="flex flex-col gap-1 flex-1 min-w-[12rem]">
-          <span className="text-[14px] sm:text-[15px] font-semibold tracking-tight text-white/[0.92] leading-tight">
-            My Tasks
-          </span>
-          {expanded ? (
-            <span className="text-[10px] sm:text-[10.5px] text-white/40 leading-snug">
-              {typeof onBriefReadySendToCursor === "function"
-                ? "Click a row for agent brief, Edit for Linear fields (title · description · due), Done to complete."
-                : "Issues from connected orgs in Settings. Edit updates title/description/due; Done completes in Linear."}
+      <input
+        ref={createImageFileRef}
+        type="file"
+        accept="image/jpeg,image/png,.jpg,.jpeg,.png"
+        className="sr-only"
+        aria-hidden
+        tabIndex={-1}
+        onChange={(e) => void onCreateImageDraftChange(e)}
+      />
+      <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] px-3 pt-2 pb-2.5 space-y-2 w-full -mt-1">
+        <div className="flex flex-nowrap items-center justify-between gap-3 w-full min-w-0">
+          <div className="flex flex-col gap-1 min-w-0 shrink">
+            <span className="text-[14px] sm:text-[15px] font-semibold tracking-tight text-white/[0.92] leading-tight truncate">
+              My Tasks
             </span>
-          ) : (
-            <span className="text-[10px] text-white/38">
-              {loading ? "Loading…" : `${rows.length} open — expand for list & brief`}
-            </span>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2 shrink-0 ml-auto">
-          <button
-            type="button"
-            onClick={toggleExpanded}
-            aria-expanded={expanded}
-            title={expanded ? "Collapse My Tasks (compact bar)" : "Expand My Tasks (full list)"}
-            className="shrink-0 inline-flex items-center gap-1 text-[11px] px-2.5 h-[26px] rounded-md bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.12] text-white/75 hover:text-white"
-          >
-            {expanded ? (
-              <>
-                <ChevronUpTiny className="opacity-85" /> Collapse
-              </>
-            ) : (
-              <>
-                <ChevronDownTiny className="opacity-85" /> Expand
-              </>
+            {expanded ? null : (
+              <span className="text-[10px] text-white/38 truncate">
+                {loading ? "Loading…" : `${rows.length} open — expand for list & brief`}
+              </span>
             )}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setCreateError(null);
-              setCreateOpen(true);
-            }}
-            className="shrink-0 text-[11px] px-3 h-[26px] rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/35 text-emerald-100"
+          </div>
+          <div
+            className="flex flex-nowrap items-center gap-1 rounded-[10px] border border-white/[0.06] bg-black/[0.2] p-1 shrink-0
+                       shadow-[inset_0_1px_0_0_rgba(255,255,255,0.035)]"
           >
-            Add task
-          </button>
-          <button
-            type="button"
-            disabled={loading}
-            onClick={() => void loadAll()}
-            className="shrink-0 text-[11px] px-3 h-[26px] rounded-md bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/35 text-violet-100 disabled:opacity-45"
-          >
-            {loading ? "Loading…" : "Refresh"}
-          </button>
+            <LinearAiDraftToolbar
+              variant="strip"
+              locked={createFieldsLocked}
+              linearVoice={linearVoice}
+              modalTalkDraftBusy={modalTalkDraftBusy}
+              imageDraftBusy={imageDraftBusy}
+              onTalk={() => {
+                setCreateError(null);
+                setCreateOpen(true);
+                queueMicrotask(() => void runTalkToDraftIssue());
+              }}
+              onCancelMic={() => linearVoice.cancel()}
+              onScreenshot={() => {
+                setCreateError(null);
+                setCreateOpen(true);
+                requestAnimationFrame(() => {
+                  requestAnimationFrame(() => triggerImageDraftPicker());
+                });
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setCreateError(null);
+                setCreateOpen(true);
+              }}
+              aria-label="Add Linear task"
+              title="Add task"
+              className="shrink-0 inline-flex items-center justify-center size-7 rounded-md text-emerald-50/95 border border-emerald-400/22 bg-emerald-500/[0.12]
+                         hover:bg-emerald-500/[0.17] hover:border-emerald-400/28 transition-colors duration-150"
+            >
+              <PlusTiny className="opacity-95" />
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => void loadAll()}
+              aria-label={loading ? "Refreshing issues" : "Refresh issues"}
+              title="Refresh"
+              className="shrink-0 inline-flex items-center justify-center size-7 rounded-md text-white/78 border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.075] hover:border-white/[0.11]
+                         hover:text-white transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <RefreshCwTiny className={loading ? "animate-spin opacity-90" : "opacity-90"} />
+            </button>
+            <button
+              type="button"
+              onClick={toggleExpanded}
+              aria-expanded={expanded}
+              aria-label={expanded ? "Collapse My Tasks" : "Expand My Tasks"}
+              title={expanded ? "Collapse My Tasks (compact bar)" : "Expand My Tasks (full list)"}
+              className="shrink-0 inline-flex items-center justify-center size-7 rounded-md text-white/78 border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.075] hover:border-white/[0.11]
+                         hover:text-white transition-colors duration-150"
+            >
+              {expanded ? (
+                <ChevronUpTiny className="opacity-90" />
+              ) : (
+                <ChevronDownTiny className="opacity-90" />
+              )}
+            </button>
+          </div>
         </div>
-      </div>
 
       {!expanded ? null : (
         <>
@@ -1058,6 +1162,155 @@ export default function LinearIssuesStrip({
   );
 }
 
+type VoiceCaptureApi = ReturnType<typeof useVoiceCapture>;
+
+function LinearAiDraftToolbar({
+  variant,
+  locked,
+  linearVoice,
+  modalTalkDraftBusy,
+  imageDraftBusy,
+  onTalk,
+  onCancelMic,
+  onScreenshot,
+}: {
+  variant: "strip" | "modal";
+  locked: boolean;
+  linearVoice: VoiceCaptureApi;
+  modalTalkDraftBusy: boolean;
+  imageDraftBusy: boolean;
+  onTalk: () => void;
+  onCancelMic: () => void;
+  onScreenshot: () => void;
+}) {
+  const isModal = variant === "modal";
+  const listening = linearVoice.state === "listening";
+  const finalizing = linearVoice.state === "finalizing";
+  const talkWorking = modalTalkDraftBusy || finalizing;
+
+  const pillBase =
+    "inline-flex items-center justify-center gap-1.5 font-medium tracking-wide transition-[transform,background-color,border-color,opacity,color] duration-150 ease-out active:scale-[0.98] disabled:opacity-38 disabled:pointer-events-none disabled:active:scale-100 outline-none focus-visible:ring-2 focus-visible:ring-white/20 focus-visible:ring-offset-1 focus-visible:ring-offset-[#0a0a0f]";
+  const size = isModal ? "h-8 px-3.5 text-[11px]" : "h-7 px-2.5 text-[11px]";
+  const iconSm = isModal ? "size-3.5" : "size-3";
+
+  const stripGhost =
+    `${pillBase} ${size} rounded-md border border-white/[0.08] bg-white/[0.03] text-white/82 hover:bg-white/[0.075] hover:border-white/[0.11] hover:text-white`;
+
+  const inner = (
+    <div className={`flex items-center gap-1 ${isModal ? "flex-wrap" : "flex-nowrap"}`}>
+      <button
+        type="button"
+        disabled={locked}
+        title="Speak your issue — pause briefly when finished (silence ends recording)"
+        onClick={onTalk}
+        className={
+          isModal
+            ? `${pillBase} ${size} rounded-full border border-cyan-400/[0.38] bg-gradient-to-b from-cyan-400/[0.14] to-cyan-950/25 text-cyan-50 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.07)] hover:border-cyan-300/55 hover:from-cyan-400/[0.22]`
+            : stripGhost
+        }
+      >
+        <MicGlyph className={`${iconSm} shrink-0 ${isModal ? "opacity-95 text-cyan-200" : "text-cyan-400/85"}`} />
+        {listening ? "Listening…" : talkWorking ? "Working…" : "Voice"}
+      </button>
+      {(listening || finalizing) && (
+        <button
+          type="button"
+          disabled={finalizing}
+          title="Stop recording"
+          onClick={onCancelMic}
+          className={`${pillBase} ${isModal ? "h-8 px-3 text-[10px] rounded-full" : "h-7 px-2 text-[10px] rounded-md"} border border-white/[0.1] bg-white/[0.05] text-white/76 hover:bg-white/[0.09]`}
+        >
+          Stop
+        </button>
+      )}
+      <button
+        type="button"
+        disabled={locked}
+        title="JPEG or PNG — AI drafts Title + Description"
+        onClick={onScreenshot}
+        className={
+          isModal
+            ? `${pillBase} ${size} rounded-full border border-violet-400/[0.38] bg-gradient-to-b from-violet-400/[0.12] to-violet-950/25 text-violet-50 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] hover:border-violet-300/55 hover:from-violet-400/[0.18]`
+            : stripGhost
+        }
+      >
+        <ImageGlyph className={`${iconSm} shrink-0 ${isModal ? "opacity-95 text-violet-200" : "text-violet-400/85"}`} />
+        {imageDraftBusy ? "Analyzing…" : "Pic"}
+      </button>
+      {!isModal && listening ? (
+        <div
+          className="flex flex-1 min-w-[2rem] max-w-[3.5rem] h-[3px] rounded-full bg-white/[0.07] overflow-hidden self-center mx-0.5"
+          aria-hidden
+        >
+          <div
+            className="h-full rounded-full bg-cyan-400/65 transition-[width] duration-75"
+            style={{ width: `${Math.round(linearVoice.level * 100)}%` }}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+
+  if (!isModal) {
+    return inner;
+  }
+
+  return (
+    <div className="rounded-xl border border-white/[0.09] bg-gradient-to-b from-white/[0.055] to-transparent px-2.5 py-2 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)] backdrop-blur-[6px]">
+      {inner}
+      {listening ? (
+        <div className="mt-2 h-[3px] rounded-full bg-white/[0.08] overflow-hidden" aria-hidden>
+          <div
+            className="h-full rounded-full bg-cyan-400/72 transition-[width] duration-75"
+            style={{ width: `${Math.round(linearVoice.level * 100)}%` }}
+          />
+        </div>
+      ) : null}
+      <p className="text-[10px] text-white/42 leading-snug pt-2 border-t border-white/[0.06] mt-2">
+        Silence ends recording; vision reads screenshots. Both only fill Title + Description — pick Team, then{" "}
+        <span className="text-emerald-200/85">Create in Linear</span>.
+      </p>
+    </div>
+  );
+}
+
+function MicGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={`shrink-0 ${className ?? ""}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z" />
+      <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v3M8 21h8" />
+    </svg>
+  );
+}
+
+function ImageGlyph({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={`shrink-0 ${className ?? ""}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect width="18" height="14" x="3" y="5" rx="2" />
+      <circle cx="9" cy="10" r="1.5" />
+      <path d="m21 15-5-5L9 17" />
+    </svg>
+  );
+}
+
 function ChevronUpTiny({ className }: { className?: string }) {
   return (
     <svg
@@ -1088,6 +1341,43 @@ function ChevronDownTiny({ className }: { className?: string }) {
       aria-hidden
     >
       <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+function PlusTiny({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={`size-3.5 shrink-0 ${className ?? ""}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+function RefreshCwTiny({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={`size-3.5 shrink-0 ${className ?? ""}`}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+      <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+      <path d="M16 16h5v5" />
     </svg>
   );
 }

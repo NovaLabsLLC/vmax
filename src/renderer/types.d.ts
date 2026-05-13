@@ -193,6 +193,7 @@ declare global {
       pillInterruptSpeech: () => Promise<void>;
       pillTranscript: (text: string) => Promise<void>;
       pillVoiceQuestion: (text: string) => Promise<void>;
+      pillLinearDraft: (text: string) => Promise<void>;
       pillRequestCursor: () => Promise<void>;
       pillToggleScreen: () => Promise<void>;
       workspaceStatus: (status: { active?: boolean; busy?: boolean; recording?: boolean; screen?: boolean }) => Promise<void>;
@@ -201,6 +202,7 @@ declare global {
       onPillTranscript: (cb: (text: string) => void) => () => void;
       onPillInterruptSpeech: (cb: () => void) => () => void;
       onPillVoiceQuestion: (cb: (text: string) => void) => () => void;
+      onPillLinearDraft: (cb: (text: string) => void) => () => void;
       onCaptionDirection: (cb: (dir: "above" | "below") => void) => () => void;
       onPillRequestCursor: (cb: () => void) => () => void;
       onPillToggleScreen: (cb: () => void) => () => void;

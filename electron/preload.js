@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("exec", {
   pillInterruptSpeech: () => ipcRenderer.invoke("pill:interrupt-speech"),
   pillTranscript: (text) => ipcRenderer.invoke("pill:transcript", text),
   pillVoiceQuestion: (text) => ipcRenderer.invoke("pill:voice-question", text),
+  pillLinearDraft: (text) => ipcRenderer.invoke("pill:linear-draft", text),
   pillRequestCursor: () => ipcRenderer.invoke("pill:request-cursor"),
   pillToggleScreen: () => ipcRenderer.invoke("pill:toggle-screen"),
   workspaceStatus: (status) => ipcRenderer.invoke("workspace:status", status),
@@ -38,6 +39,11 @@ contextBridge.exposeInMainWorld("exec", {
     const h = (_e, text) => cb(text);
     ipcRenderer.on("pill:voice-question", h);
     return () => ipcRenderer.removeListener("pill:voice-question", h);
+  },
+  onPillLinearDraft: (cb) => {
+    const h = (_e, text) => cb(text);
+    ipcRenderer.on("pill:linear-draft", h);
+    return () => ipcRenderer.removeListener("pill:linear-draft", h);
   },
   onPillRequestCursor: (cb) => {
     const h = () => cb();

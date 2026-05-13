@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { dispatchPayloadFromSplits, splitAgentsForPrompt } from "../utils/splitAgents";
+import { isLinearDraftVoiceIntent } from "../utils/linearDraftVoiceIntent";
 import { deriveSpeakable, toSpeakableLine } from "../utils/talkBackText";
 
 type ChatMsg = { role: "user" | "assistant"; text: string; ts: number };
@@ -153,6 +154,25 @@ export default function OverlayMiniChat({
       }
 
       const summaryTrim = repoContextSummary?.trim() ?? "";
+
+      if (typeof window.exec.pillLinearDraft === "function" && isLinearDraftVoiceIntent(q)) {
+        await window.exec.focusCommandCenter({ view: "workspace" });
+        await window.exec.pillLinearDraft(q);
+        setMsgs((m) => {
+          const next = [
+            ...m,
+            {
+              role: "assistant" as const,
+              text: "Opening Command Center — drafting Title and Description for Add Linear task from what you said. Pick team there, then Create.",
+              ts: Date.now(),
+            },
+          ];
+          msgsRef.current = next;
+          return next;
+        });
+        speak(toSpeakableLine("Drafting Linear issue in Command Center.", 2));
+        return;
+      }
 
       if (typeof window.exec.dispatch === "function") {
         let splits: Awaited<ReturnType<typeof splitAgentsForPrompt>> = [];
