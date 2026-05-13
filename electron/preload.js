@@ -140,8 +140,11 @@ contextBridge.exposeInMainWorld("exec", {
   rememberRepo: (p) => ipcRenderer.invoke("exec:remember-repo", p),
   pickRepo: () => ipcRenderer.invoke("exec:pick-repo"),
   scanRepo: (repoPath) => ipcRenderer.invoke("exec:scan-repo", repoPath),
+  workspaceGitQuickPush: (payload) =>
+    ipcRenderer.invoke("exec:workspace-git-quick-push", payload || {}),
   openInCursor: (repoPath) => ipcRenderer.invoke("exec:open-in-cursor", repoPath),
   copy: (text) => ipcRenderer.invoke("exec:copy", text),
+  readClipboardText: () => ipcRenderer.invoke("exec:read-clipboard-text"),
   sendToCursorChat: (payload) => ipcRenderer.invoke("exec:send-to-cursor-chat", payload),
 
   cliStatus: () => ipcRenderer.invoke("cli:status"),

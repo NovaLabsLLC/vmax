@@ -1,5 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { dispatchPayloadFromSplits, splitAgentsForPrompt } from "../utils/splitAgents";
+import {
+  dispatchPayloadFromSplits,
+  pillDelimiterDispatchPayload,
+  splitAgentsForPrompt,
+} from "../utils/splitAgents";
 import { isLinearDraftVoiceIntent } from "../utils/linearDraftVoiceIntent";
 import { deriveSpeakable, toSpeakableLine } from "../utils/talkBackText";
 
@@ -175,14 +179,19 @@ export default function OverlayMiniChat({
       }
 
       if (typeof window.exec.dispatch === "function") {
-        let splits: Awaited<ReturnType<typeof splitAgentsForPrompt>> = [];
-        try {
-          splits = await splitAgentsForPrompt(q, summaryTrim || null);
-        } catch (err) {
-          console.warn("split-agents failed; falling back to single-agent dispatch", err);
+        const delimPayload = pillDelimiterDispatchPayload(q);
+        let dres;
+        if (delimPayload) {
+          dres = await window.exec.dispatch(delimPayload);
+        } else {
+          let splits: Awaited<ReturnType<typeof splitAgentsForPrompt>> = [];
+          try {
+            splits = await splitAgentsForPrompt(q, summaryTrim || null);
+          } catch (err) {
+            console.warn("split-agents failed; falling back to single-agent dispatch", err);
+          }
+          dres = await window.exec.dispatch(dispatchPayloadFromSplits(q, splits));
         }
-
-        const dres = await window.exec.dispatch(dispatchPayloadFromSplits(q, splits));
 
         if (!dres || !("ok" in dres)) {
           const msg = "Dispatch returned an unexpected response.";

@@ -36,9 +36,9 @@ type Props = {
    * Otherwise pick the chip whose name best matches scanned repo name or folder basename.
    */
   workspaceRepoSync?: { repoPath: string | null; repoName: string | null } | null;
+  /** Bump to trigger a silent My Tasks refetch (e.g. after patching an issue). */
+  refreshEpoch?: number;
 };
-
-type WsBucket = { key: string; label: string; count: number };
 
 function repoBasenameForMatch(full: string): string {
   const s = full.replace(/[/\\]+$/, "");
@@ -126,6 +126,7 @@ export default function LinearIssuesStrip({
   voiceDraftFromPill,
   onConsumeVoiceDraftFromPill,
   workspaceRepoSync,
+  refreshEpoch = 0,
 }: Props) {
   const [rows, setRows] = useState<LinearIssueRow[]>([]);
   const [meta, setMeta] = useState<FetchLinearIssuesResult["workspaces"]>([]);
@@ -362,6 +363,11 @@ export default function LinearIssuesStrip({
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
+
+  useEffect(() => {
+    if (!refreshEpoch) return;
+    void loadAll({ silent: true });
+  }, [refreshEpoch, loadAll]);
 
   const loadTeamsForCreate = useCallback(async (workspaceId: string | null) => {
     const gen = ++teamsFetchGenRef.current;

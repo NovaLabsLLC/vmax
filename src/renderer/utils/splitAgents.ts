@@ -1,4 +1,5 @@
 import { backendFetch } from "./backendApi";
+import { parsePillDualAgentPrompts } from "./pillDelimiterSplit";
 
 /** Overlay/voice unblock when FastAPI is down or wedged — `fetch` has no implicit timeout. */
 const SPLIT_AGENTS_TIMEOUT_MS = 14_000;
@@ -27,13 +28,18 @@ type SplitAgentsResponse = {
 export function dispatchPayloadFromSplits(
   userPrompt: string,
   splits: AgentSplit[],
-): { agentPrompts: AgentSplit[] } | { agent: SplitAgent; prompt: string } | { prompt: string } {
+):
+  | { agentPrompts: AgentSplit[] }
+  | { agent: SplitAgent; prompt: string; routingReason: string }
+  | { prompt: string } {
   const trimmed = userPrompt.trim();
   if (splits.length >= 2) return { agentPrompts: splits };
   if (splits.length === 1) {
     const s = splits[0];
     const p = (s.prompt || "").trim() || trimmed;
-    return { agent: s.agent, prompt: p };
+    const routingReason = (s.reason || "").trim() || "split-agents";
+    /* `routingReason` tells main process this is LLM split routing, not a user "forced" override. */
+    return { agent: s.agent, prompt: p, routingReason };
   }
   return { prompt: trimmed };
 }
@@ -44,6 +50,17 @@ export function dispatchPayloadFromSplits(
  * `dispatchPayloadFromSplits` so the heuristic router still runs on the
  * full prompt; when one row returns, use the same helper to **force** that agent.
  */
+/**
+ * When the message contains two or more `<<<VMAX:AGENT:*>>>` blocks, skip `/v1/split-agents`
+ * and send `{ prompt }` only so Electron's `parsePillDualAgentPrompts` fan-out wins.
+ */
+export function pillDelimiterDispatchPayload(prompt: string): { prompt: string } | null {
+  const trimmed = prompt.trim();
+  if (!trimmed) return null;
+  const parsed = parsePillDualAgentPrompts(trimmed);
+  return parsed && parsed.length >= 2 ? { prompt: trimmed } : null;
+}
+
 export async function splitAgentsForPrompt(
   prompt: string,
   repoContextSummary?: string | null,

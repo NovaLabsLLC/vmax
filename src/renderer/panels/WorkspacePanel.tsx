@@ -13,7 +13,7 @@ import { buildOpenClawSpeakable, deriveSpeakable, proseToSpeakable, toSpeakableL
 import { subscribeSettingsUpdated } from "../utils/subscribeSettingsUpdated";
 import { formatRepoContextSummary } from "../utils/repoContextSummary";
 import { extractLinearIssueId } from "../utils/extractLinearIssueId";
-import { moveLinearIssueToInReview } from "../utils/linearIssuePatch";
+import { moveLinearIssueToInReview, patchLinearIssue } from "../utils/linearIssuePatch";
 
 type ResultKind = "idle" | "plan" | "failure" | "diff";
 type TermLine = { stream: "stdout" | "stderr" | "meta"; text: string };
@@ -57,6 +57,9 @@ export default function WorkspacePanel({
   const [starting, setStarting] = useState(false);
   const [repoPath, setRepoPath] = useState<string | null>(null);
   const [repo, setRepo] = useState<RepoContext | null>(null);
+  const [quickPushBusy, setQuickPushBusy] = useState(false);
+  const [linearStripRefreshEpoch, setLinearStripRefreshEpoch] = useState(0);
+  const [cursorClipboardWatch, setCursorClipboardWatch] = useState(false);
   const repoContextSummary = useMemo(() => formatRepoContextSummary(repo), [repo]);
 
   // task + AI results
@@ -73,6 +76,14 @@ export default function WorkspacePanel({
   const [runCommand, setRunCommand] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const lastRunOutputRef = useRef<string>("");
+
+  /** Cursor clipboard watch — baseline after each Cursor send (seed last clipboard snapshot). */
+  const lastCursorPromptSentRef = useRef("");
+  const clipboardPollLastRawRef = useRef("");
+  const lastEmittedClipboardBodyRef = useRef("");
+  const clipboardWatchDeadlineRef = useRef(0);
+  const cursorClipboardWatchRef = useRef(false);
+  const resolvedLinearIssueIdRef = useRef<string | null>(null);
 
   const appendWorkspaceTerminal = useCallback((text: string, stream: "stdout" | "stderr") => {
     const line = text.endsWith("\n") ? text : `${text}\n`;
@@ -216,11 +227,120 @@ export default function WorkspacePanel({
   useEffect(() => { planRef.current = plan; }, [plan]);
   useEffect(() => { failureRef.current = failure; }, [failure]);
 
+  useEffect(() => {
+    resolvedLinearIssueIdRef.current = resolvedLinearIssueId;
+  }, [resolvedLinearIssueId]);
+
+  useEffect(() => {
+    cursorClipboardWatchRef.current = cursorClipboardWatch;
+  }, [cursorClipboardWatch]);
+
   // Mirror active/busy to the pill (screen state is broadcast by CommandCenter; overlay merges partial updates).
   useEffect(() => {
-    const busy = resultLoading || starting || !!activity || !!runId;
+    const busy = resultLoading || starting || !!activity || !!runId || quickPushBusy;
     window.exec.workspaceStatus({ active, busy });
-  }, [active, resultLoading, starting, activity, runId]);
+  }, [active, resultLoading, starting, activity, runId, quickPushBusy]);
+
+  /** Poll clipboard after Cursor sends — captures ⌘C replies without clicking Import (15 min window). */
+  useEffect(() => {
+    if (!active || !cursorClipboardWatch) return undefined;
+    if (typeof window.exec.readClipboardText !== "function") return undefined;
+
+    const POLL_MS = 2000;
+    const MIN_CHARS = 120;
+    const MAX_TERM = 48000;
+    const MAX_LINEAR_APPEND = 28000;
+
+    const id = window.setInterval(() => {
+      void (async () => {
+        if (!activeRef.current || !cursorClipboardWatchRef.current) return;
+        if (Date.now() > clipboardWatchDeadlineRef.current) {
+          setCursorClipboardWatch(false);
+          return;
+        }
+        try {
+          const res = await window.exec.readClipboardText();
+          if (!res.ok || typeof res.text !== "string") return;
+          const raw = res.text;
+          if (raw === clipboardPollLastRawRef.current) return;
+          clipboardPollLastRawRef.current = raw;
+
+          const t = raw.trim();
+          if (t.length < MIN_CHARS) return;
+
+          const sent = lastCursorPromptSentRef.current.trim();
+          if (
+            sent &&
+            (t === sent ||
+              (sent.length >= 40 && t.startsWith(sent.slice(0, Math.min(120, sent.length)))))
+          ) {
+            return;
+          }
+          if (t.includes("**Vmax demo safety:**")) return;
+
+          if (t === lastEmittedClipboardBodyRef.current.trim()) return;
+
+          lastEmittedClipboardBodyRef.current = t;
+
+          const termBody =
+            t.length > MAX_TERM
+              ? `${t.slice(0, MAX_TERM)}\n… (${t.length - MAX_TERM} chars not shown)\n`
+              : t;
+          appendWorkspaceTerminal(
+            `\n── Cursor clipboard (auto-captured, ${t.length} chars) ──\n${termBody}\n`,
+            "stdout",
+          );
+
+          const linearId = resolvedLinearIssueIdRef.current?.trim();
+          if (linearId) {
+            try {
+              const forLinear =
+                t.length > MAX_LINEAR_APPEND
+                  ? `${t.slice(0, MAX_LINEAR_APPEND)}\n\n_(truncated for Linear)_`
+                  : t;
+              const stamp = new Date().toISOString();
+              const block = `---\n**Cursor reply** (auto-import via Vmax watch, ${stamp})\n\n${forLinear}`;
+              await patchLinearIssue(linearId, { description_append: block });
+              setLinearStripRefreshEpoch((n) => n + 1);
+              say(`Auto-appended capture to Linear ${linearId}.`, "success");
+            } catch (e) {
+              say(
+                `Captured in terminal but Linear append failed: ${String((e as Error)?.message || e)}`,
+                "warn",
+              );
+            }
+          }
+        } catch {
+          /* noop */
+        }
+      })();
+    }, POLL_MS);
+
+    return () => window.clearInterval(id);
+  }, [active, cursorClipboardWatch, appendWorkspaceTerminal, say]);
+
+  /** Lightweight trace: pill-dispatched CLI/Cursor automation status lines in the workspace terminal. */
+  useEffect(() => {
+    if (typeof window.exec.onAgentsStatus !== "function") return undefined;
+    const off = window.exec.onAgentsStatus((evt) => {
+      if (!activeRef.current) return;
+      if (!evt.agent) return;
+      if (evt.state === "running" && evt.runId) {
+        appendWorkspaceTerminal(
+          `\n[agents] ${evt.agent} running — ${evt.reason || evt.runId}\n`,
+          "stdout",
+        );
+      } else if (evt.state === "done" && evt.runId) {
+        appendWorkspaceTerminal(`\n[agents] ${evt.agent} done — ${evt.runId}\n`, "stdout");
+      } else if (evt.state === "error") {
+        appendWorkspaceTerminal(
+          `\n[agents] ${evt.agent} error — ${evt.error || evt.runId || ""}\n`,
+          "stderr",
+        );
+      }
+    });
+    return () => off();
+  }, [appendWorkspaceTerminal]);
 
   // React to screen status changes with talk-back.
   const prevScreenStatusRef = useRef<typeof screenStatus | undefined>(undefined);
@@ -613,6 +733,34 @@ export default function WorkspacePanel({
     const ctx = await window.exec.scanRepo(repoPath);
     setRepo(ctx);
     if (ctx.ok) say("Rescanned repo.");
+  }
+
+  async function gitQuickPushFromWorkspace() {
+    if (!active || !repoPath || repo?.ok !== true || quickPushBusy) return;
+    if (typeof window.exec.workspaceGitQuickPush !== "function") {
+      say("Quick push is not available in this build.", "warn");
+      return;
+    }
+    setQuickPushBusy(true);
+    beginActivity("run", "Git: staging, committing, pushing…");
+    try {
+      const res = await window.exec.workspaceGitQuickPush({ repoPath: repo.root });
+      if (!res.ok) {
+        say(res.error || "Quick push failed.", "warn");
+        endActivity({ tone: "err", text: res.error || "Quick push failed." });
+        return;
+      }
+      say(res.message, "success");
+      endActivity({ tone: "ok", text: res.message });
+      speakAloud(res.message, { maxSentences: 2 });
+      await rescan();
+    } catch (e) {
+      const msg = String((e as Error)?.message || e);
+      say(`Quick push failed: ${msg}`, "warn");
+      endActivity({ tone: "err", text: msg });
+    } finally {
+      setQuickPushBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -1110,6 +1258,19 @@ export default function WorkspacePanel({
     if (r.ok) {
       endActivity({ tone: "ok", text: "Sent to Cursor" });
       say(line, r.automationFailed ? "warn" : "success");
+      if (typeof window.exec.readClipboardText === "function") {
+        lastCursorPromptSentRef.current = prompt.trim();
+        lastEmittedClipboardBodyRef.current = "";
+        try {
+          const snap = await window.exec.readClipboardText();
+          clipboardPollLastRawRef.current =
+            snap.ok && typeof snap.text === "string" ? snap.text : "";
+        } catch {
+          clipboardPollLastRawRef.current = "";
+        }
+        clipboardWatchDeadlineRef.current = Date.now() + 15 * 60 * 1000;
+        setCursorClipboardWatch(true);
+      }
     } else if (r.reason === "accessibility") {
       endActivity({ tone: "err", text: "Cursor blocked: Accessibility" });
       say(line, "warn");
@@ -1179,40 +1340,65 @@ export default function WorkspacePanel({
   return (
     <div className="w-full max-w-none box-border px-4 sm:px-6 lg:px-8 pt-6 pb-12 space-y-3">
       {/* Header */}
-      <div className="flex items-center gap-3 mb-1">
-        <div>
+      <div className="flex items-center gap-3 mb-1 min-w-0 w-full">
+        <div className="min-w-0 shrink">
           <div className="text-[18px] font-semibold tracking-tight">Workspace</div>
           <div className="text-[12.5px] text-white/50 mt-0.5">
-            Your live session — task, plan, and run output, all in one place.
+            Your live session: task, plan, and run output, all in one place.
           </div>
         </div>
         {!active ? (
-          <button
-            onClick={startExec}
-            disabled={starting}
-            className={`ml-auto h-9 px-4 rounded-lg text-[12.5px] font-medium tracking-tight
-                        bg-white text-black hover:bg-white/90
-                        shadow-[0_0_24px_-4px_rgba(255,255,255,0.45)]
-                        ${starting ? "opacity-60 cursor-wait" : ""}`}
-          >
-            {starting ? "Starting…" : "Start Vmax"}
-          </button>
+          <div className="ml-auto min-w-0 flex justify-end overflow-x-auto overscroll-x-contain">
+            <div className="flex flex-nowrap items-center gap-2 shrink-0">
+              <WorkspaceLaunchOverlayButton />
+              <button
+                onClick={startExec}
+                disabled={starting}
+                className={`h-8 shrink-0 px-3 rounded-md text-[11px] font-medium tracking-tight
+                          bg-white text-black hover:bg-white/90
+                          shadow-[0_0_24px_-4px_rgba(255,255,255,0.45)]
+                          ${starting ? "opacity-60 cursor-wait" : ""}`}
+              >
+                {starting ? "Starting…" : "Start Vmax"}
+              </button>
+            </div>
+          </div>
         ) : (
-          <div className="ml-auto flex items-center gap-2">
-            <button
-              onClick={changeRepo}
-              className="h-9 px-3 rounded-lg text-[12px] font-medium bg-black text-white border border-white/90
-                         hover:bg-white/[0.06] hover:text-white hover:border-white"
-            >
-              Select Repo
-            </button>
+          <div className="ml-auto min-w-0 flex justify-end overflow-x-auto overscroll-x-contain">
+            <div className="flex flex-nowrap items-center gap-2 shrink-0">
+              <WorkspaceLaunchOverlayButton />
+              <button
+                type="button"
+                onClick={changeRepo}
+                className="h-8 min-w-[7.75rem] px-2.5 rounded-md text-[11px] font-medium inline-flex items-center justify-center shrink-0
+                         bg-black text-white border border-white/90
+                         hover:bg-white/[0.06] hover:text-white hover:border-white transition-colors"
+              >
+                Select Repo
+              </button>
+              {repo?.ok ? (
+                <button
+                  type="button"
+                  disabled={quickPushBusy || !!runId}
+                  aria-busy={quickPushBusy}
+                  aria-label="Stage all changes, commit with the Vmax quick message, and push"
+                  title='Stage, commit & push — git add -A, commit with message "chore(vmax): quick commit from Command Center", then git push.'
+                  onClick={() => void gitQuickPushFromWorkspace()}
+                  className={`h-8 min-w-[7.75rem] px-2.5 rounded-md text-[11px] font-semibold inline-flex items-center justify-center shrink-0 border transition-colors
+                            border-emerald-400/40 bg-emerald-500/[0.18] text-emerald-50 hover:bg-emerald-500/28 hover:border-emerald-400/55
+                            ${quickPushBusy || runId ? "opacity-55 cursor-not-allowed" : ""}`}
+                >
+                  {quickPushBusy ? "…" : "Push"}
+                </button>
+              ) : null}
+            </div>
           </div>
         )}
       </div>
 
       {/* Repo strip + activity bar only matter when a repo is active */}
       {active && (
-        <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-3">
+        <div className="rounded-xl bg-white/[0.02] border border-white/[0.06] p-3 space-y-2">
           <RepoStrip repo={repo} onRescan={rescan} />
         </div>
       )}
@@ -1230,6 +1416,7 @@ export default function WorkspacePanel({
         voiceDraftFromPill={pendingLinearDraft}
         onConsumeVoiceDraftFromPill={onConsumeLinearDraft}
         workspaceRepoSync={workspaceLinearRepoSync}
+        refreshEpoch={linearStripRefreshEpoch}
       />
       {resolvedLinearIssueId ? (
         <div
@@ -1242,11 +1429,10 @@ export default function WorkspacePanel({
           <div className="text-[11px] text-white/75 leading-snug space-y-1.5">
             {afterCursorHandoff ? (
               <p>
-                <span className="font-medium text-emerald-100/95">Cursor has the enriched brief.</span> Finish there, then
-                tap{" "}
-                <strong className="text-emerald-200/90">Done</strong> for <span className="mono">{resolvedLinearIssueId}</span>{" "}
-                on that row in <strong className="text-white/82">My Tasks</strong>. Vmax doesn&apos;t watch Cursor for
-                completion automatically.
+                <span className="font-medium text-emerald-100/95">Cursor has the enriched brief.</span> When finished there, tap{" "}
+                <strong className="text-emerald-200/90">Done</strong> for{" "}
+                <span className="mono">{resolvedLinearIssueId}</span> on that row in{" "}
+                <strong className="text-white/82">My Tasks</strong>.
               </p>
             ) : (
               <p>
@@ -1343,5 +1529,31 @@ export default function WorkspacePanel({
         </div>
       )}
     </div>
+  );
+}
+
+/** Opens / focuses the floating pill — placed on Workspace header (EXE-44). */
+function WorkspaceLaunchOverlayButton() {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      aria-label="Launch floating Vmax assistant"
+      title="Opens the floating pill — voice, chat, and agent dispatch."
+      onClick={() => {
+        if (busy) return;
+        setBusy(true);
+        void window.exec
+          .openOverlay()
+          .catch((err) => console.error("[Launch app]", err))
+          .finally(() => setBusy(false));
+      }}
+      className="h-8 min-w-[7.75rem] px-2.5 rounded-md text-[11px] font-semibold shrink-0 inline-flex items-center justify-center border transition-colors
+                 border-emerald-400/40 bg-emerald-500/[0.18] text-emerald-50 hover:bg-emerald-500/28 hover:border-emerald-400/55
+                 disabled:opacity-55 disabled:pointer-events-none"
+    >
+      {busy ? "Opening…" : "Launch app"}
+    </button>
   );
 }

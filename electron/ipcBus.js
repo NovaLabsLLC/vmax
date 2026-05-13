@@ -5,7 +5,7 @@
 // react, and vice-versa for status pushes. All overlay sizing IPC (renderer
 // → main) also lives here since it just delegates into windows.js.
 
-const { app, ipcMain, BrowserWindow } = require("electron");
+const { app, ipcMain, BrowserWindow, clipboard } = require("electron");
 const usageStats = require("./utils/usageStats.js");
 const {
   getCommandWindow,
@@ -34,19 +34,51 @@ function sendToOverlay(channel, payload) {
   if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
 }
 
-/** Run transcripts can be large; only the Command Center subscribes (Workspace). */
-function broadcastRunData(runId, stream, chunk) {
-  sendToCommandCenter("exec:run:data", { runId, stream, chunk });
+/**
+ * Workspace / Live agents subscribe in the Command Center. Optionally mirror the same
+ * transcript to the overlay so pill-dispatched CLI runs are visible without switching windows.
+ *
+ * @param {{ includeOverlay?: boolean }} [opts]
+ */
+function broadcastRunData(runId, stream, chunk, opts) {
+  const payload = { runId, stream, chunk };
+  sendToCommandCenter("exec:run:data", payload);
+  if (opts && opts.includeOverlay) {
+    sendToOverlay("exec:run:data", payload);
+  }
 }
 
-function broadcastRunEnd(runId, code, error) {
+/**
+ * @param {{ includeOverlay?: boolean }} [opts]
+ */
+function broadcastRunEnd(runId, code, error, opts) {
   const c = typeof code === "number" && !Number.isNaN(code) ? code : -1;
   const payload = { runId, code: c };
   if (error) payload.error = String(error);
   sendToCommandCenter("exec:run:end", payload);
+  if (opts && opts.includeOverlay) {
+    sendToOverlay("exec:run:end", payload);
+  }
 }
 
 function register() {
+  /** Clipboard read — registered here so it always loads with ipcBus (before repo/cursor modules). */
+  ipcMain.handle("exec:read-clipboard-text", () => {
+    try {
+      const text = clipboard.readText();
+      return { ok: true, text: typeof text === "string" ? text : "" };
+    } catch (err) {
+      return {
+        ok: false,
+        error: String((err && err.message) || err),
+        text: "",
+      };
+    }
+  });
+
+  /** Workspace quick push — registered with ipcBus so the handler always loads (EXE-46). */
+  require("./ipc/gitWorkflow.js").register();
+
   ipcMain.handle("exec:open-overlay", () => createOverlayWindow());
   ipcMain.handle("exec:close-overlay", () => {
     const w = getOverlayWindow();

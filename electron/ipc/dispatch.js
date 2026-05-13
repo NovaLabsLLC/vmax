@@ -23,6 +23,7 @@ const { runners, friendlyClaudeError, friendlyCodexError } = require("./runners.
 const { CURSOR_CLIPBOARD_SAFETY_FOOTER } = require("../../utils/commandSafety.js");
 const { routeAgentIntent } = require("../utils/agentIntent.js");
 const { openRepoInCursor } = require("../openCursorWorkspace.js");
+const { parsePillDualAgentPrompts } = require("../../utils/pillPromptSplit.js");
 
 /** @param {string} rawPrompt intent classification for exec:dispatch + structured-task fallback routing */
 function routeAgent(rawPrompt) {
@@ -121,13 +122,13 @@ function startPillAgentDispatch(repoPath, spec) {
         if (streamEnded) return;
         streamEnded = true;
         const c = typeof code === "number" && !Number.isNaN(code) ? code : -1;
-        broadcastRunEnd(runId, c, error);
+        broadcastRunEnd(runId, c, error, { includeOverlay: true });
       };
-      child.stdout.on("data", (d) => broadcastRunData(runId, "stdout", d.toString()));
+      child.stdout.on("data", (d) => broadcastRunData(runId, "stdout", d.toString(), { includeOverlay: true }));
       child.stderr.on("data", (d) => {
         const chunk = d.toString();
         stderr += chunk;
-        broadcastRunData(runId, "stderr", chunk);
+        broadcastRunData(runId, "stderr", chunk, { includeOverlay: true });
       });
       child.on("close", (code) => {
         runners.delete(runId);
@@ -167,13 +168,13 @@ function startPillAgentDispatch(repoPath, spec) {
         if (streamEnded) return;
         streamEnded = true;
         const c = typeof code === "number" && !Number.isNaN(code) ? code : -1;
-        broadcastRunEnd(runId, c, error);
+        broadcastRunEnd(runId, c, error, { includeOverlay: true });
       };
-      child.stdout.on("data", (d) => broadcastRunData(runId, "stdout", d.toString()));
+      child.stdout.on("data", (d) => broadcastRunData(runId, "stdout", d.toString(), { includeOverlay: true }));
       child.stderr.on("data", (d) => {
         const chunk = d.toString();
         stderr += chunk;
-        broadcastRunData(runId, "stderr", chunk);
+        broadcastRunData(runId, "stderr", chunk, { includeOverlay: true });
       });
       child.on("close", (code) => {
         runners.delete(runId);
@@ -310,8 +311,15 @@ function register() {
       };
     }
 
+    const routingReasonRaw =
+      typeof payload.routingReason === "string" ? payload.routingReason.trim() : "";
+
     const decision = forcedAgentRaw
-      ? { agent: String(forcedAgentRaw), reason: "forced" }
+      ? {
+          agent: String(forcedAgentRaw),
+          /* Split-agents single spec sends `routingReason`; legacy callers omit it → label as explicit pick. */
+          reason: routingReasonRaw || "explicit agent",
+        }
       : routeAgent(promptOnly);
     const normalized = normalizeDispatchAgent(decision.agent);
     if (!normalized) {

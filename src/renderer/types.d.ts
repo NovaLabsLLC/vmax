@@ -263,8 +263,19 @@ declare global {
       rememberRepo: (p: string) => Promise<void>;
       pickRepo: () => Promise<string | null>;
       scanRepo: (repoPath: string) => Promise<RepoContext>;
+      /** Stage all (`git add -A`), optional commit with fixed message, `git push`. Repo must match Command Center selection. */
+      workspaceGitQuickPush: (
+        payload?: { repoPath?: string },
+      ) => Promise<
+        | { ok: true; committed: boolean; branch: string; message: string }
+        | { ok: false; error: string; committed?: boolean }
+      >;
       openInCursor: (repoPath: string) => Promise<{ ok: boolean; via: "cli" | "open-a" | "url" | "finder" }>;
       copy: (text: string) => Promise<boolean>;
+      /** Plain-text clipboard — use after copying a Cursor agent reply (⌘C). */
+      readClipboardText: () => Promise<
+        { ok: true; text: string } | { ok: false; error?: string; text: string }
+      >;
       sendToCursorChat: (p: { repoPath: string; prompt: string }) => Promise<{
         ok: boolean;
         reason?: string;
@@ -296,6 +307,8 @@ declare global {
         payload: {
           prompt?: string;
           agent?: ExecAgent;
+          /** When `agent` came from `/v1/split-agents` (single split), the model’s routing explanation — not user override. */
+          routingReason?: string;
           agentPrompts?: { agent: ExecAgent; prompt: string; reason?: string }[];
         },
       ) => Promise<

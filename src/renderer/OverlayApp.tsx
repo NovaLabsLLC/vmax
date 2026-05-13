@@ -6,7 +6,11 @@ import { useVoiceCapture } from "./hooks/useVoiceCapture";
 import { useScreen } from "./hooks/useScreen";
 import { formatRepoContextSummary } from "./utils/repoContextSummary";
 import { subscribeSettingsUpdated } from "./utils/subscribeSettingsUpdated";
-import { dispatchPayloadFromSplits, splitAgentsForPrompt } from "./utils/splitAgents";
+import {
+  dispatchPayloadFromSplits,
+  pillDelimiterDispatchPayload,
+  splitAgentsForPrompt,
+} from "./utils/splitAgents";
 import { isLinearDraftVoiceIntent } from "./utils/linearDraftVoiceIntent";
 import type { AgentStatusEvent, VmaxOverlayBroadcast, VmaxPanelPayload } from "./types";
 
@@ -79,15 +83,24 @@ export default function OverlayApp() {
   const dispatchBusyDepthRef = useRef(0);
   /** Pill dispatch jobs still in flight (`running`). Used to terminate Claude/Codex via cancelRun. */
   const dispatchActiveRunIdsRef = useRef<Set<string>>(new Set());
+  /** Tail of CLI stdout/stderr mirrored from exec:run:data for pill-dispatched agents. */
+  const dispatchRunLogRef = useRef("");
+
+  const [dispatchRunLog, setDispatchRunLog] = useState("");
 
   useEffect(() => {
     if (typeof window.exec.onAgentsStatus !== "function") return;
     return window.exec.onAgentsStatus((evt: AgentStatusEvent) => {
       if (evt.state === "running" && evt.runId) {
+        const newBatch = dispatchBusyDepthRef.current === 0;
         dispatchActiveRunIdsRef.current.add(evt.runId);
         dispatchBusyDepthRef.current += 1;
         setDispatchBusy(true);
         setDispatchError(null);
+        if (newBatch) {
+          dispatchRunLogRef.current = "";
+          setDispatchRunLog("");
+        }
       }
       if (evt.state === "done" || evt.state === "error") {
         if (evt.runId) dispatchActiveRunIdsRef.current.delete(evt.runId);
@@ -96,6 +109,29 @@ export default function OverlayApp() {
         if (dispatchBusyDepthRef.current === 0) setDispatchBusy(false);
       }
     });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window.exec.onRunData !== "function") return;
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleFlush = () => {
+      if (flushTimer != null) return;
+      flushTimer = setTimeout(() => {
+        flushTimer = null;
+        setDispatchRunLog(dispatchRunLogRef.current);
+      }, 75);
+    };
+    const off = window.exec.onRunData((e) => {
+      if (!e?.runId || !dispatchActiveRunIdsRef.current.has(e.runId)) return;
+      const chunk = typeof e.chunk === "string" ? e.chunk : "";
+      if (!chunk) return;
+      dispatchRunLogRef.current = (dispatchRunLogRef.current + chunk).slice(-8000);
+      scheduleFlush();
+    });
+    return () => {
+      off();
+      if (flushTimer != null) clearTimeout(flushTimer);
+    };
   }, []);
 
   async function cancelPillDispatchAgents() {
@@ -251,13 +287,19 @@ export default function OverlayApp() {
       // Fan-out: backend splitter → 0 (heuristic router), 1 (forced agent +
       // slice prompt), or ≥2 parallel agentPrompts.
       if (typeof window.exec.dispatch === "function") {
-        let splits: Awaited<ReturnType<typeof splitAgentsForPrompt>> = [];
-        try {
-          splits = await splitAgentsForPrompt(clean);
-        } catch (err) {
-          console.warn("split-agents failed; falling back to single-agent dispatch", err);
+        const delimPayload = pillDelimiterDispatchPayload(clean);
+        let res;
+        if (delimPayload) {
+          res = await window.exec.dispatch(delimPayload);
+        } else {
+          let splits: Awaited<ReturnType<typeof splitAgentsForPrompt>> = [];
+          try {
+            splits = await splitAgentsForPrompt(clean);
+          } catch (err) {
+            console.warn("split-agents failed; falling back to single-agent dispatch", err);
+          }
+          res = await window.exec.dispatch(dispatchPayloadFromSplits(clean, splits));
         }
-        const res = await window.exec.dispatch(dispatchPayloadFromSplits(clean, splits));
         if (!res?.ok && res?.error) setDispatchError(res.error);
       } else {
         if (typeof window.exec.pillLinearDraft === "function" && isLinearDraftVoiceIntent(clean)) {
@@ -575,15 +617,30 @@ export default function OverlayApp() {
         />
 
         {dispatchBusy ? (
-          <div className="no-drag px-3 pb-1.5 flex items-center justify-end">
-            <button
-              type="button"
-              title="Stops Claude / Codex CLI processes started from this dispatch. Cursor automation runs in phases and may complete after you stop."
-              onClick={() => void cancelPillDispatchAgents()}
-              className="text-[11px] font-medium px-3 py-1.5 rounded-lg border border-rose-400/35 bg-rose-500/[0.12] text-rose-100/95 hover:bg-rose-500/20 transition-colors"
-            >
-              Stop agents
-            </button>
+          <div className="no-drag px-3 pb-1.5 flex flex-col gap-1.5">
+            {dispatchRunLog.trim() ? (
+              <div
+                className="max-h-32 overflow-y-auto rounded-lg border border-white/[0.08] bg-black/35 px-2.5 py-2 font-mono text-[10px] leading-snug text-emerald-100/90 whitespace-pre-wrap break-words"
+                role="log"
+                aria-label="Agent CLI output"
+              >
+                {dispatchRunLog}
+              </div>
+            ) : (
+              <p className="text-[10.5px] text-white/45 px-0.5">
+                Agent running — CLI output streams here (and in Command Center → workspace).
+              </p>
+            )}
+            <div className="flex items-center justify-end">
+              <button
+                type="button"
+                title="Stops Claude / Codex CLI processes started from this dispatch. Cursor automation runs in phases and may complete after you stop."
+                onClick={() => void cancelPillDispatchAgents()}
+                className="text-[11px] font-medium px-3 py-1.5 rounded-lg border border-rose-400/35 bg-rose-500/[0.12] text-rose-100/95 hover:bg-rose-500/20 transition-colors"
+              >
+                Stop agents
+              </button>
+            </div>
           </div>
         ) : null}
 
