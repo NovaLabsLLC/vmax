@@ -73,13 +73,13 @@ function statusTone(r: AgentLiveRow): "run" | "ok" | "err" | "idle" {
   return "idle";
 }
 
-const FILTER_KEYS: readonly (ExecAgent | "all")[] = ["all", "claude", "codex", "cursor"];
+const FILTER_KEYS: readonly (ExecAgent | "all")[] = ["all", "claude"];
 
 type Props = { className?: string };
 
 /**
  * Streams `exec:run:*` keyed by runId alongside `task:status` and `agents:status`
- * so parallel Claude/Codex (and Cursor metadata) stay visible together.
+ * so parallel agent runs stay visible together.
  */
 export default function LiveAgentsPanel({ className = "" }: Props) {
   const [rows, setRows] = useState<Map<string, AgentLiveRow>>(() => new Map());
@@ -283,12 +283,12 @@ export default function LiveAgentsPanel({ className = "" }: Props) {
       <div className="absolute inset-0 -z-10 bg-[#070709]/97 pointer-events-none" />
       <div className="absolute inset-0 -z-10 bg-gradient-to-b from-white/[0.04] via-transparent to-transparent pointer-events-none" />
       <div className="relative border-b border-white/[0.06] px-3 py-2 flex flex-wrap items-center gap-2">
-        <div className="flex flex-col gap-0.5 min-w-[140px]">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-white/45">
+        <div className="flex flex-col gap-1 min-w-0 shrink">
+          <span className="text-[14px] sm:text-[15px] font-semibold tracking-tight text-white/[0.92] leading-tight truncate">
             Live agents
           </span>
-          <span className="text-[10.5px] text-white/40">
-            {runningCount > 0 ? `${runningCount} active` : "Idle"} · Claude & Codex subprocess stdout/stderr stream here when those tools run
+          <span className="text-[10px] text-white/38 truncate">
+            {runningCount > 0 ? `${runningCount} active` : "Idle"}
           </span>
         </div>
         <div className="flex flex-wrap gap-1.5 ml-auto">
@@ -303,7 +303,7 @@ export default function LiveAgentsPanel({ className = "" }: Props) {
                   : "bg-white/[0.04] border-white/[0.08] text-white/70 hover:bg-white/[0.07]"
               }`}
             >
-              {key === "all" ? "All" : key === "claude" ? "Claude" : key === "codex" ? "Codex" : "Cursor"}
+              {key === "all" ? "All" : "Claude"}
             </button>
           ))}
         </div>

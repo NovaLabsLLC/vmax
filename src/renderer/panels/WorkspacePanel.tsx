@@ -424,6 +424,9 @@ export default function WorkspacePanel({
         loadedSessionRef.current = null;
         lastTitleRef.current = "";
         pendingActionRef.current = null;
+        setLinearIssueFromStrip(null);
+        setAfterCursorHandoff(false);
+        setLinearUndoAfterDoneId(null);
         setTask("");
         setPlan(null);
         setFailure(null);
@@ -441,6 +444,9 @@ export default function WorkspacePanel({
       }
 
       if (activeSessionId && activeSessionId !== loadedSessionRef.current) {
+        setLinearIssueFromStrip(null);
+        setAfterCursorHandoff(false);
+        setLinearUndoAfterDoneId(null);
         const s = await window.exec.getSession(activeSessionId);
         if (cancelled || !s) return;
         loadedSessionRef.current = activeSessionId;
@@ -1187,24 +1193,6 @@ export default function WorkspacePanel({
           </button>
         ) : (
           <div className="ml-auto flex items-center gap-2">
-            <button
-              onClick={async () => {
-                const s = await window.exec.newSession({
-                  repoPath: repoPath || undefined,
-                  repoName: repo?.ok ? repo.name : undefined,
-                });
-                // clear local state for the new chat
-                setTask(""); setPlan(null); setFailure(null); setDiffSummary(null);
-                setMessages([]); setResultKind("idle"); setLines([]);
-                lastTitleRef.current = "";
-                loadedSessionRef.current = s.id;
-                onSessionChange?.(s.id);
-              }}
-              className="h-9 px-3 rounded-lg text-[12px] font-medium bg-white text-black border border-white
-                         hover:bg-white/90 hover:border-white/95 shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
-            >
-              + New chat
-            </button>
             <button
               onClick={changeRepo}
               className="h-9 px-3 rounded-lg text-[12px] font-medium bg-black text-white border border-white/90

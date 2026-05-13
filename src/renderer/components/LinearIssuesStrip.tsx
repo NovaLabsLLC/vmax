@@ -496,6 +496,12 @@ export default function LinearIssuesStrip({
     return [...tally.values()];
   }, [meta, rows]);
 
+  /** Stable across refetches that only change counts / row list — avoids re-applying repo hint every `loadAll`. */
+  const workspaceBucketIdsSig = useMemo(
+    () => filterBuckets.map((b) => b.key).sort().join("\0"),
+    [filterBuckets],
+  );
+
   useEffect(() => {
     if (workspaceFilter === "all") return;
     const ok = filterBuckets.some((b) => b.key === workspaceFilter);
@@ -516,7 +522,7 @@ export default function LinearIssuesStrip({
         ? "all"
         : linearWorkspaceKeyFromRepoHint(workspaceRepoSync.repoName, workspaceRepoSync.repoPath, filterBuckets);
     setWorkspaceFilter(next);
-  }, [workspaceRepoSync, workspaceRepoSync?.repoPath, workspaceRepoSync?.repoName, filterBuckets]);
+  }, [workspaceRepoSync, workspaceRepoSync?.repoPath, workspaceRepoSync?.repoName, workspaceBucketIdsSig]);
 
   const submitCreate = useCallback(async () => {
     const title = createTitle.trim();

@@ -18,7 +18,8 @@ export type AgentsConnectionGraphProps = {
 };
 
 /**
- * SVG hub-and-spokes: Vmax ⇄ Claude / Codex / Cursor when each bridge reports ready.
+ * SVG hub-and-spokes: hub always connects to Claude / Codex / Cursor (three fixed anchors).
+ * `ok` dims spokes and rings until that bridge reports installed+authed (Cursor: mac host).
  * `live[*] === "running"` thickens edges and pulses the peripheral ring + “running…”.
  */
 export default function AgentsConnectionGraph({
@@ -28,7 +29,8 @@ export default function AgentsConnectionGraph({
 }: AgentsConnectionGraphProps) {
   const gradId = `agents-edge-${useId().replace(/:/g, "")}`;
   const mac = isMacPlatform();
-  const connected = [
+  const orbit = variant === "compact" ? 118 : 132;
+  const specs = [
     {
       id: "claude" as const,
       label: "Claude Code",
@@ -47,26 +49,21 @@ export default function AgentsConnectionGraph({
       detail: "Editor bridge",
       ok: mac,
     },
-  ].filter((a) => a.ok);
-
+  ];
+  /** Always lay out hub + three satellites so topology stays clear; `ok` only affects prominence. */
+  const n = 3;
   const W = 420;
   const H = 360;
   const cx = W / 2;
   const cy = H / 2;
-  const orbit = variant === "compact" ? 118 : 132;
-  const n = connected.length;
-
-  const nodes =
-    n === 0
-      ? []
-      : connected.map((a, i) => {
-          const angle = -Math.PI / 2 + (i * (2 * Math.PI)) / n;
-          return {
-            ...a,
-            x: cx + Math.cos(angle) * orbit,
-            y: cy + Math.sin(angle) * orbit,
-          };
-        });
+  const nodes = specs.map((a, i) => {
+    const angle = -Math.PI / 2 + (i * (2 * Math.PI)) / n;
+    return {
+      ...a,
+      x: cx + Math.cos(angle) * orbit,
+      y: cy + Math.sin(angle) * orbit,
+    };
+  });
 
   const svgClass =
     variant === "compact"
@@ -84,15 +81,16 @@ export default function AgentsConnectionGraph({
       </defs>
 
       {nodes.map((node) => (
-        <line
-          key={node.id}
-          x1={cx}
-          y1={cy}
-          x2={node.x}
-          y2={node.y}
-          stroke={`url(#${gradId})`}
-          strokeWidth={live[node.id] === "running" ? 2.2 : 1.2}
-        />
+        <g key={`spoke-${node.id}`} opacity={node.ok ? 1 : 0.35}>
+          <line
+            x1={cx}
+            y1={cy}
+            x2={node.x}
+            y2={node.y}
+            stroke={`url(#${gradId})`}
+            strokeWidth={live[node.id] === "running" ? 2.2 : node.ok ? 1.2 : 0.85}
+          />
+        </g>
       ))}
 
       <g transform={`translate(${cx},${cy})`}>
@@ -113,18 +111,19 @@ export default function AgentsConnectionGraph({
 
       {nodes.map((node) => {
         const pulse = live[node.id] === "running";
+        const dim = node.ok ? 1 : 0.45;
         const strokeCol =
           node.id === "claude"
             ? pulse
               ? "rgba(251,191,36,0.85)"
-              : "rgba(251,191,36,0.35)"
+              : `rgba(251,191,36,${0.35 * dim})`
             : node.id === "codex"
               ? pulse
                 ? "rgba(52,211,153,0.85)"
-                : "rgba(52,211,153,0.35)"
+                : `rgba(52,211,153,${0.35 * dim})`
               : pulse
                 ? "rgba(167,139,250,0.85)"
-                : "rgba(167,139,250,0.35)";
+                : `rgba(167,139,250,${0.35 * dim})`;
         return (
           <g key={node.id} transform={`translate(${node.x},${node.y})`}>
             <circle

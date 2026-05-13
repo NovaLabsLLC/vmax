@@ -164,7 +164,7 @@ function fileToAvatarDataUrl(file: File): Promise<string> {
 
 /**
  * Narrow Discord-style workspace rail — icons only. Click selects most recent chat
- * in that repo bucket (+ session change). WorkspacePanel handles New chat etc.
+ * in that repo bucket (+ session change).
  */
 export default function WorkspaceIconRail({ activeSessionId, onActiveSessionChange }: Props) {
   const [rows, setRows] = useState<Row[]>([]);
@@ -288,7 +288,7 @@ export default function WorkspaceIconRail({ activeSessionId, onActiveSessionChan
 
   return (
     <>
-      <div className="h-full min-h-0 w-[52px] shrink-0 flex flex-col border-r border-white/[0.1] bg-[#08080a]/95 backdrop-blur-sm">
+      <div className="h-full min-h-0 w-[78px] shrink-0 flex flex-col border-r border-white/[0.1] bg-[#08080a]/95 backdrop-blur-sm">
         <input
           ref={fileInputRef}
           type="file"
@@ -299,7 +299,7 @@ export default function WorkspaceIconRail({ activeSessionId, onActiveSessionChan
           onChange={(e) => void handleAvatarFile(e)}
         />
         <nav
-          className="flex-1 flex flex-col items-center gap-3 py-2.5 overflow-y-auto overflow-x-visible min-h-0"
+          className="flex-1 flex flex-col items-center gap-4 py-4 overflow-y-auto overflow-x-visible min-h-0"
           aria-label="Workspaces"
         >
         {workspaces.map((ws) => {
@@ -316,8 +316,8 @@ export default function WorkspaceIconRail({ activeSessionId, onActiveSessionChan
                 e.preventDefault();
                 setIconMenu({ x: e.clientX, y: e.clientY, wsKey: ws.key });
               }}
-              className={`relative group shrink-0 size-10 overflow-hidden rounded-[14px] flex items-center justify-center transition-all duration-150 ease-out
-                ${active ? "rounded-[12px] ring-2 ring-white/95 shadow-[0_0_0_1px_rgba(255,255,255,0.22)] scale-[1.02]" : "rounded-[14px] border hover:rounded-[12px] hover:brightness-[1.08]"}`}
+              className={`relative group shrink-0 size-12 overflow-hidden rounded-[16px] flex items-center justify-center transition-all duration-150 ease-out
+                ${active ? "rounded-[14px] ring-2 ring-white/95 shadow-[0_0_0_1px_rgba(255,255,255,0.22)] scale-[1.02]" : "rounded-[16px] border hover:rounded-[14px] hover:brightness-[1.08]"}`}
               style={
                 customImg || active
                   ? undefined
@@ -329,7 +329,7 @@ export default function WorkspaceIconRail({ activeSessionId, onActiveSessionChan
               <WorkspaceFace wsKey={ws.key} label={ws.label} img={customImg} railActive={active} />
               {active ? (
                 <span
-                  className="absolute -left-1 top-1/2 -translate-y-1/2 w-1 h-6 rounded-r bg-white shadow-[2px_0_10px_rgba(255,255,255,0.45)] pointer-events-none"
+                  className="absolute left-[-3px] top-1/2 -translate-y-1/2 w-[3px] h-9 rounded-r bg-white shadow-[2px_0_12px_rgba(255,255,255,0.45)] pointer-events-none"
                   aria-hidden
                 />
               ) : null}
@@ -342,8 +342,8 @@ export default function WorkspaceIconRail({ activeSessionId, onActiveSessionChan
           title="Add workspace — pick a repo folder"
           disabled={addingWs}
           onClick={() => void addWorkspaceFromFolder()}
-          className="shrink-0 size-10 rounded-[14px] border border-dashed border-white/20 text-white/55 hover:text-white hover:border-white/35 hover:bg-white/[0.06]
-                     flex items-center justify-center text-lg leading-none disabled:opacity-40"
+          className="shrink-0 size-12 rounded-[16px] border border-dashed border-white/20 text-white/55 hover:text-white hover:border-white/35 hover:bg-white/[0.06]
+                     flex items-center justify-center text-xl leading-none disabled:opacity-40"
         >
           {addingWs ? "…" : "+"}
         </button>
@@ -431,14 +431,14 @@ function WorkspaceFace({
   }
   if (railActive) {
     return (
-      <span className="flex size-full items-center justify-center text-[13px] font-semibold tracking-tight text-neutral-950 bg-white pointer-events-none select-none">
+      <span className="flex size-full items-center justify-center text-[15px] font-semibold tracking-tight text-neutral-950 bg-white pointer-events-none select-none">
         {letter}
       </span>
     );
   }
   return (
     <span
-      className="flex size-full items-center justify-center text-[13px] font-semibold tracking-tight text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)] pointer-events-none select-none"
+      className="flex size-full items-center justify-center text-[15px] font-semibold tracking-tight text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)] pointer-events-none select-none"
       style={{ backgroundColor: `hsl(${palette.h} ${palette.s}% ${palette.l}%)` }}
     >
       {letter}

@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { VmaxPanelAction } from "./types";
 import SettingsPanel from "./panels/SettingsPanel";
-import WorkspaceIconRail from "./components/WorkspaceIconRail";
 import WorkspacePanel from "./panels/WorkspacePanel";
 import Onboarding from "./onboarding/Onboarding";
 
@@ -17,7 +16,7 @@ export default function CommandCenter() {
   /** Voice routed from overlay → forwarded to Workspace Ask (epoch bumps effect). */
   const [voiceFromPill, setVoiceFromPill] = useState<{ text: string; epoch: number } | null>(null);
   const [linearDraftFromPill, setLinearDraftFromPill] = useState<{ text: string; epoch: number } | null>(null);
-  /** Active Workspace chat in exec-sessions.json; hydrated by WorkspacePanel · rail switches bucket. */
+  /** Active Workspace chat in exec-sessions.json (`WorkspacePanel` saves + reports id). */
   const [workspaceSessionId, setWorkspaceSessionId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -83,21 +82,20 @@ export default function CommandCenter() {
         <div className={`h-full min-h-0 overflow-y-auto absolute inset-0 ${page !== "settings" ? "hidden" : ""}`}>
           <SettingsPanel />
         </div>
-        <div className={`h-full min-h-0 min-w-0 absolute inset-0 flex flex-row ${page !== "workspace" ? "hidden" : ""}`}>
-          <WorkspaceIconRail activeSessionId={workspaceSessionId} onActiveSessionChange={setWorkspaceSessionId} />
-          <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden">
-            <WorkspacePanel
-              pendingVoiceQuestion={voiceFromPill}
-              onConsumeVoiceQuestion={() => setVoiceFromPill(null)}
-              pendingLinearDraft={linearDraftFromPill}
-              onConsumeLinearDraft={() => setLinearDraftFromPill(null)}
-              activeSessionId={workspaceSessionId}
-              onSessionChange={setWorkspaceSessionId}
-              registerVmaxPanelExecutor={(dispatcher) => {
-                vmaxDispatcherRef.current = dispatcher;
-              }}
-            />
-          </div>
+        <div
+          className={`h-full min-h-0 min-w-0 absolute inset-0 overflow-y-auto overflow-x-hidden ${page !== "workspace" ? "hidden" : ""}`}
+        >
+          <WorkspacePanel
+            pendingVoiceQuestion={voiceFromPill}
+            onConsumeVoiceQuestion={() => setVoiceFromPill(null)}
+            pendingLinearDraft={linearDraftFromPill}
+            onConsumeLinearDraft={() => setLinearDraftFromPill(null)}
+            activeSessionId={workspaceSessionId}
+            onSessionChange={setWorkspaceSessionId}
+            registerVmaxPanelExecutor={(dispatcher) => {
+              vmaxDispatcherRef.current = dispatcher;
+            }}
+          />
         </div>
       </div>
 

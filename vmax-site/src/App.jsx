@@ -638,15 +638,21 @@ const Hero = () => {
                     </circle>
                     <text x="160" y="138" textAnchor="middle" fill={T.ink} fontFamily={T.sans} fontSize={fz(11)} fontWeight="600">Vmax</text>
                     <text x="160" y="151" textAnchor="middle" fill={T.inkMute} fontFamily={T.mono} fontSize={fz(8)}>manager</text>
-                    {/* dormant spokes first */}
+                    {/* Base hub→every agent (always Claude + Codex + Cursor topology) */}
                     {nodeDefs.map((n, i) => {
                       const hot = duoSet.has(i);
                       return (
-                        <g key={`hero-spoke-${i}`}>
-                          {!hot && (
-                            <line x1="160" y1="140" x2={n.x} y2={n.y} stroke={T.hair} strokeWidth={0.8} strokeDasharray="2 3" opacity={0.45} />
-                          )}
-                        </g>
+                        <line
+                          key={`hero-spoke-base-${i}`}
+                          x1="160"
+                          y1="140"
+                          x2={n.x}
+                          y2={n.y}
+                          stroke={T.hairStrong}
+                          strokeWidth={1}
+                          strokeLinecap="round"
+                          opacity={hot ? 0.2 : 0.5}
+                        />
                       );
                     })}
                     {/* glowing active spokes */}
