@@ -961,25 +961,25 @@ export default function LinearIssuesStrip({
       ) : null}
 
       {showFilters ? (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/40 shrink-0">
-            Filter
-          </span>
-          <div className="flex flex-wrap gap-1.5">
+        <div
+          className="flex flex-wrap items-center gap-1 w-full min-w-0 rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1.5
+                     shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]"
+          role="group"
+          aria-label="Workspace filter"
+        >
+          <FilterChip
+            label={`All (${rows.length})`}
+            active={workspaceFilter === "all"}
+            onClick={() => setWorkspaceFilter("all")}
+          />
+          {filterBuckets.map((b) => (
             <FilterChip
-              label={`All (${rows.length})`}
-              active={workspaceFilter === "all"}
-              onClick={() => setWorkspaceFilter("all")}
+              key={b.key}
+              label={`${b.label} (${b.count})`}
+              active={workspaceFilter === b.key}
+              onClick={() => setWorkspaceFilter(b.key)}
             />
-            {filterBuckets.map((b) => (
-              <FilterChip
-                key={b.key}
-                label={`${b.label} (${b.count})`}
-                active={workspaceFilter === b.key}
-                onClick={() => setWorkspaceFilter(b.key)}
-              />
-            ))}
-          </div>
+          ))}
         </div>
       ) : null}
 
@@ -1412,10 +1412,10 @@ function FilterChip({
     <button
       type="button"
       onClick={onClick}
-      className={`text-[11px] px-2.5 py-1 rounded-full font-medium transition-colors border ${
+      className={`text-[10px] px-2 h-6 inline-flex items-center rounded-md font-medium transition-colors border ${
         active
-          ? "bg-violet-500/35 text-violet-50 border-violet-400/50"
-          : "bg-white/[0.04] text-white/70 border-white/[0.1] hover:bg-white/[0.08] hover:text-white"
+          ? "bg-violet-500/[0.18] text-violet-100/95 border-violet-400/35 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)]"
+          : "bg-transparent text-white/62 border-white/[0.08] hover:bg-white/[0.05] hover:border-white/[0.11] hover:text-white/85"
       }`}
     >
       {label}
