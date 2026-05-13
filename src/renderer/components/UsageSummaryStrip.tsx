@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from "react";
+import type { AgentUsageRow } from "./AgentUsageStrip";
 
 export type UsageSummaryPayload = {
   updatedAt: number;
   totals: Record<string, number>;
   byAgent: Record<string, number>;
+  agents?: AgentUsageRow[];
 };
 
 type Props = {
@@ -27,6 +29,13 @@ export default function UsageSummaryStrip({ bumpEpoch = 0, dense }: Props) {
     };
   }, [bumpEpoch]);
 
+  useEffect(() => {
+    if (typeof window.exec.onUsageUpdated !== "function") return undefined;
+    return window.exec.onUsageUpdated(() => {
+      void window.exec.getUsageSummary().then((d) => setData(d as UsageSummaryPayload));
+    });
+  }, []);
+
   if (typeof window.exec.getUsageSummary !== "function") return null;
 
   const totals = data?.totals || {};
@@ -47,7 +56,17 @@ export default function UsageSummaryStrip({ bumpEpoch = 0, dense }: Props) {
   if (shipAll > 0) parts.push(`Ship → agents ${shipAll} (${shipOk} ok)`);
   if (pill > 0) parts.push(`Pill routing ${pill}`);
   if (ch > 0) parts.push(`Cursor sends ${ch}`);
-  if (anyAgent || parts.length > 0) {
+  const agents = data?.agents;
+  if (agents && agents.length > 0) {
+    parts.push(
+      agents
+        .map(
+          (a) =>
+            `${a.label}: Σ${a.totalLifetime} · today ${a.totalToday}${a.quotaDaily != null ? `/${a.quotaDaily}` : ""} · left ${a.remainingDaily === null ? "∞" : a.remainingDaily}`,
+        )
+        .join(" · "),
+    );
+  } else if (anyAgent || parts.length > 0) {
     parts.push(`Runs Claude ${Number(by.claude) || 0} · Codex ${Number(by.codex) || 0} · Cursor ${Number(by.cursor) || 0}`);
   }
 

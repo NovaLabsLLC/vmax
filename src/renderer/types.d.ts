@@ -369,12 +369,25 @@ declare global {
       }) => Promise<VmaxTaskTriggerResult>;
       taskGet: (taskId: string) => Promise<VmaxTaskRunRecord | null>;
       taskList: () => Promise<VmaxTaskRunRecord[]>;
-      /** Local aggregates in `exec-usage.json` — no prompts stored. */
+  /** Local aggregates in `exec-usage.json` — no prompts stored. Includes per-agent rows when available (EXE-42). */
       getUsageSummary: () => Promise<{
         updatedAt: number;
         totals: Record<string, number>;
         byAgent: Record<string, number>;
+        byDay?: Record<string, Record<string, number>>;
+        byDayAgent?: Record<string, Record<string, number>>;
+        recent?: unknown[];
+        agents?: Array<{
+          id: string;
+          label: string;
+          totalLifetime: number;
+          totalToday: number;
+          quotaDaily: number | null;
+          remainingDaily: number | null;
+        }>;
       }>;
+      /** Fires after usage counters change (pill dispatch, structured ship, Cursor handoff). */
+      onUsageUpdated: (cb: (p: { updatedAt?: number }) => void) => () => void;
       taskCancel: (taskId: string) => Promise<boolean>;
       onTaskStatus: (cb: (r: VmaxTaskRunRecord) => void) => () => void;
       explainFailure: (p: {

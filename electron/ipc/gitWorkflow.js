@@ -6,8 +6,7 @@ const fs = require("fs");
 const { spawnSync } = require("child_process");
 const { ipcMain } = require("electron");
 const { readState } = require("../state.js");
-
-const QUICK_COMMIT_MESSAGE = "chore(vmax): quick commit from Command Center";
+const { composeWorkspaceQuickCommit } = require("../../utils/gitCommitMessage.js");
 
 function runGit(repoPath, args) {
   const r = spawnSync("git", args, {
@@ -71,7 +70,12 @@ function register() {
 
     let committed = false;
     if (hasStagedChanges(repoPath)) {
-      const cm = runGit(repoPath, ["commit", "-m", QUICK_COMMIT_MESSAGE]);
+      const { subject, body } = await composeWorkspaceQuickCommit(repoPath);
+      const msgArgs =
+        body && String(body).trim().length > 0
+          ? ["commit", "-m", subject, "-m", body]
+          : ["commit", "-m", subject];
+      const cm = runGit(repoPath, msgArgs);
       if (cm.err) return { ok: false, error: cm.err.message || String(cm.err) };
       if (cm.code !== 0) {
         return {

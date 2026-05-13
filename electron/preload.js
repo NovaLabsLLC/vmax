@@ -184,6 +184,11 @@ contextBridge.exposeInMainWorld("exec", {
   taskList: () => ipcRenderer.invoke("task:list"),
   /** Local-only counters (`userData/exec-usage.json`): tasks, structured ship, pill dispatch, Cursor. */
   getUsageSummary: () => ipcRenderer.invoke("usage:summary"),
+  onUsageUpdated: (cb) => {
+    const h = (_e, p) => cb(p || {});
+    ipcRenderer.on("usage:updated", h);
+    return () => ipcRenderer.removeListener("usage:updated", h);
+  },
   taskCancel: (taskId) => ipcRenderer.invoke("task:cancel", taskId),
   onTaskStatus: (cb) => {
     const h = (_e, p) => cb(p || {});

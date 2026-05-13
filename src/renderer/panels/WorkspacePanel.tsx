@@ -1382,7 +1382,7 @@ export default function WorkspacePanel({
                   disabled={quickPushBusy || !!runId}
                   aria-busy={quickPushBusy}
                   aria-label="Stage all changes, commit with the Vmax quick message, and push"
-                  title='Stage, commit & push — git add -A, commit with message "chore(vmax): quick commit from Command Center", then git push.'
+                  title="Stage, commit & push: git add -A, auto-generated conventional commit (summary + inventory + optional AI summary when backend is up), then git push."
                   onClick={() => void gitQuickPushFromWorkspace()}
                   className={`h-8 min-w-[7.75rem] px-2.5 rounded-md text-[11px] font-semibold inline-flex items-center justify-center shrink-0 border transition-colors
                             border-emerald-400/40 bg-emerald-500/[0.18] text-emerald-50 hover:bg-emerald-500/28 hover:border-emerald-400/55

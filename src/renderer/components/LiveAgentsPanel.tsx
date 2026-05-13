@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentRunState, AgentStatusEvent, ExecAgent, VmaxTaskRunRecord } from "../types";
+import AgentUsageStrip from "./AgentUsageStrip";
 import AgentsConnectionGraph, { type AgentsCliPayload } from "./AgentsConnectionGraph";
 
 type RowSource = "task" | "dispatch";
@@ -282,16 +283,17 @@ export default function LiveAgentsPanel({ className = "" }: Props) {
     >
       <div className="absolute inset-0 -z-10 bg-[#070709]/97 pointer-events-none" />
       <div className="absolute inset-0 -z-10 bg-gradient-to-b from-white/[0.04] via-transparent to-transparent pointer-events-none" />
-      <div className="relative border-b border-white/[0.06] px-3 py-2 flex flex-wrap items-center gap-2">
-        <div className="flex flex-col gap-1 min-w-0 shrink">
-          <span className="text-[14px] sm:text-[15px] font-semibold tracking-tight text-white/[0.92] leading-tight truncate">
-            Live agents
-          </span>
-          <span className="text-[10px] text-white/38 truncate">
-            {runningCount > 0 ? `${runningCount} active` : "Idle"}
-          </span>
-        </div>
-        <div className="flex flex-wrap gap-1.5 ml-auto">
+      <div className="relative border-b border-white/[0.06] px-3 py-2 flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-col gap-1 min-w-0 shrink">
+            <span className="text-[14px] sm:text-[15px] font-semibold tracking-tight text-white/[0.92] leading-tight truncate">
+              Live agents
+            </span>
+            <span className="text-[10px] text-white/38 truncate">
+              {runningCount > 0 ? `${runningCount} active` : "Idle"}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5 ml-auto">
           {FILTER_KEYS.map((key) => (
             <button
               key={key}
@@ -306,7 +308,9 @@ export default function LiveAgentsPanel({ className = "" }: Props) {
               {key === "all" ? "All" : "Claude"}
             </button>
           ))}
+          </div>
         </div>
+        <AgentUsageStrip />
       </div>
 
       <div className="relative flex max-h-[min(52vh,480px)] min-h-[220px] flex-1 flex-row divide-x divide-white/[0.06]">
