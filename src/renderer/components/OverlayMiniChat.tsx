@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { splitAgentsForPrompt } from "../utils/splitAgents";
+import { dispatchPayloadFromSplits, splitAgentsForPrompt } from "../utils/splitAgents";
 import { deriveSpeakable, toSpeakableLine } from "../utils/talkBackText";
 
 type ChatMsg = { role: "user" | "assistant"; text: string; ts: number };
@@ -162,10 +162,7 @@ export default function OverlayMiniChat({
           console.warn("split-agents failed; falling back to single-agent dispatch", err);
         }
 
-        const dres =
-          splits.length >= 2
-            ? await window.exec.dispatch({ agentPrompts: splits })
-            : await window.exec.dispatch({ prompt: q });
+        const dres = await window.exec.dispatch(dispatchPayloadFromSplits(q, splits));
 
         if (!dres || !("ok" in dres)) {
           const msg = "Dispatch returned an unexpected response.";

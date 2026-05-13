@@ -6,7 +6,7 @@ import { useVoiceCapture } from "./hooks/useVoiceCapture";
 import { useScreen } from "./hooks/useScreen";
 import { formatRepoContextSummary } from "./utils/repoContextSummary";
 import { subscribeSettingsUpdated } from "./utils/subscribeSettingsUpdated";
-import { splitAgentsForPrompt } from "./utils/splitAgents";
+import { dispatchPayloadFromSplits, splitAgentsForPrompt } from "./utils/splitAgents";
 import type { AgentStatusEvent, VmaxOverlayBroadcast, VmaxPanelPayload } from "./types";
 
 /** Resize the pill window; prefers `overlay:set-bounds`, falls back if main predates that handler. */
@@ -76,22 +76,39 @@ export default function OverlayApp() {
 
   /** Multiple concurrent exec:dispatch agents all emit running → done/error; track depth. */
   const dispatchBusyDepthRef = useRef(0);
+  /** Pill dispatch jobs still in flight (`running`). Used to terminate Claude/Codex via cancelRun. */
+  const dispatchActiveRunIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (typeof window.exec.onAgentsStatus !== "function") return;
     return window.exec.onAgentsStatus((evt: AgentStatusEvent) => {
-      if (evt.state === "running") {
+      if (evt.state === "running" && evt.runId) {
+        dispatchActiveRunIdsRef.current.add(evt.runId);
         dispatchBusyDepthRef.current += 1;
         setDispatchBusy(true);
         setDispatchError(null);
       }
       if (evt.state === "done" || evt.state === "error") {
+        if (evt.runId) dispatchActiveRunIdsRef.current.delete(evt.runId);
         dispatchBusyDepthRef.current = Math.max(0, dispatchBusyDepthRef.current - 1);
         if (evt.state === "error" && evt.error) setDispatchError(evt.error);
         if (dispatchBusyDepthRef.current === 0) setDispatchBusy(false);
       }
     });
   }, []);
+
+  async function cancelPillDispatchAgents() {
+    const ids = [...dispatchActiveRunIdsRef.current];
+    await Promise.all(
+      ids.map(async (runId) => {
+        try {
+          await window.exec.cancelRun(runId);
+        } catch {
+          /* noop */
+        }
+      }),
+    );
+  }
 
   useEffect(() => {
     const off = window.exec.onWorkspaceStatus((s) => setStatus((prev) => ({ ...prev, ...s })));
@@ -223,10 +240,8 @@ export default function OverlayApp() {
       const { text } = await window.exec.transcribe(result);
       const clean = (text || "").trim();
       if (!clean) return;
-      // Fan-out: ask the backend splitter to decompose into 1–3 concurrent
-      // jobs (one per agent). If it returns ≥2, dispatch them in parallel;
-      // otherwise fall back to the heuristic single-agent router so trivial
-      // prompts don't pay the multi-agent tax.
+      // Fan-out: backend splitter → 0 (heuristic router), 1 (forced agent +
+      // slice prompt), or ≥2 parallel agentPrompts.
       if (typeof window.exec.dispatch === "function") {
         let splits: Awaited<ReturnType<typeof splitAgentsForPrompt>> = [];
         try {
@@ -234,10 +249,7 @@ export default function OverlayApp() {
         } catch (err) {
           console.warn("split-agents failed; falling back to single-agent dispatch", err);
         }
-        const res =
-          splits.length >= 2
-            ? await window.exec.dispatch({ agentPrompts: splits })
-            : await window.exec.dispatch({ prompt: clean });
+        const res = await window.exec.dispatch(dispatchPayloadFromSplits(clean, splits));
         if (!res?.ok && res?.error) setDispatchError(res.error);
       } else {
         await window.exec.pillVoiceQuestion(clean);
@@ -548,6 +560,19 @@ export default function OverlayApp() {
             else if (r.error) setDispatchError(r.error);
           }}
         />
+
+        {dispatchBusy ? (
+          <div className="no-drag px-3 pb-1.5 flex items-center justify-end">
+            <button
+              type="button"
+              title="Stops Claude / Codex CLI processes started from this dispatch. Cursor automation runs in phases and may complete after you stop."
+              onClick={() => void cancelPillDispatchAgents()}
+              className="text-[11px] font-medium px-3 py-1.5 rounded-lg border border-rose-400/35 bg-rose-500/[0.12] text-rose-100/95 hover:bg-rose-500/20 transition-colors"
+            >
+              Stop agents
+            </button>
+          </div>
+        ) : null}
 
         {dispatchError && !showVmaxBody ? (
           <div className="no-drag px-4 pb-2 -mt-1 text-[10.5px] text-rose-200/85 truncate">
