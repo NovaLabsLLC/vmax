@@ -1,5 +1,8 @@
 import { backendFetch } from "./backendApi";
 
+/** Overlay/voice unblock when FastAPI is down or wedged — `fetch` has no implicit timeout. */
+const SPLIT_AGENTS_TIMEOUT_MS = 14_000;
+
 export type SplitAgent = "claude" | "codex" | "cursor";
 
 export type AgentSplit = {
@@ -53,9 +56,16 @@ export async function splitAgentsForPrompt(
     repo_context_summary: repoContextSummary ?? null,
   });
 
-  const res = await backendFetch<SplitAgentsResponse>("/v1/split-agents", {
-    method: "POST",
-    body,
-  });
-  return Array.isArray(res.splits) ? res.splits : [];
+  const ac = new AbortController();
+  const timer = window.setTimeout(() => ac.abort(), SPLIT_AGENTS_TIMEOUT_MS);
+  try {
+    const res = await backendFetch<SplitAgentsResponse>("/v1/split-agents", {
+      method: "POST",
+      body,
+      signal: ac.signal,
+    });
+    return Array.isArray(res.splits) ? res.splits : [];
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
