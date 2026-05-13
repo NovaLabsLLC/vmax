@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { splitAgentsForPrompt } from "../utils/splitAgents";
 import { deriveSpeakable, toSpeakableLine } from "../utils/talkBackText";
 
 type ChatMsg = { role: "user" | "assistant"; text: string; ts: number };
@@ -75,19 +76,45 @@ function useOverlaySpeak(talkBack: boolean) {
   return speak;
 }
 
-/** Small text chat: same Ask + Vmax overlay path as workspace, without opening Command Center. */
+function formatDispatchAssistantMessage(
+  res: {
+    ok: true;
+    mode?: "single" | "multi";
+    agent?: string;
+    reason?: string;
+    runs?: { agent: string; reason?: string; runId: string }[];
+  },
+): string {
+  if (res.mode === "multi" && res.runs?.length) {
+    const lines = res.runs.map((r) => {
+      const why = r.reason?.trim();
+      return `• ${r.agent}${why ? ` — ${why}` : ""}`;
+    });
+    return `Started ${res.runs.length} agents:\n${lines.join("\n")}`;
+  }
+  const agent = res.agent || "agent";
+  const why = res.reason?.trim();
+  return `Started ${agent}${why ? ` — ${why}` : ""}.`;
+}
+
+/** Small text chat: mirrors voice routing (split + exec:dispatch); falls back to Ask when dispatch is unavailable. */
 export default function OverlayMiniChat({
   talkBack,
   getScreenshot,
+  repoContextSummary,
   open,
   onOpenChange,
   onPendingChange,
+  onDispatchComplete,
 }: {
   talkBack: boolean;
   getScreenshot: () => string | null;
+  /** When set (valid repo scan), forwarded to split-agents + Ask — same idea as Command Center. */
+  repoContextSummary?: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onPendingChange?: (pending: boolean) => void;
+  onDispatchComplete?: (r: { ok: boolean; error?: string }) => void;
 }) {
   const [input, setInput] = useState("");
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
@@ -121,18 +148,67 @@ export default function OverlayMiniChat({
     setPending(true);
     try {
       const screenshotBase64 = getScreenshot() || null;
-      if (typeof window.exec.publishVmaxResponse === "function") {
-        void window.exec.publishVmaxResponse({ phase: "loading", question: q });
-      }
       if (typeof window.exec.setOverlayExpanded === "function") {
         void window.exec.setOverlayExpanded(true);
       }
-      // Repo context intentionally NOT sent — the model was hallucinating
-      // about untracked files when users asked unrelated questions like "hello".
+
+      const summaryTrim = repoContextSummary?.trim() ?? "";
+
+      if (typeof window.exec.dispatch === "function") {
+        let splits: Awaited<ReturnType<typeof splitAgentsForPrompt>> = [];
+        try {
+          splits = await splitAgentsForPrompt(q, summaryTrim || null);
+        } catch (err) {
+          console.warn("split-agents failed; falling back to single-agent dispatch", err);
+        }
+
+        const dres =
+          splits.length >= 2
+            ? await window.exec.dispatch({ agentPrompts: splits })
+            : await window.exec.dispatch({ prompt: q });
+
+        if (!dres || !("ok" in dres)) {
+          const msg = "Dispatch returned an unexpected response.";
+          onDispatchComplete?.({ ok: false, error: msg });
+          setMsgs((m) => {
+            const next = [...m, { role: "assistant" as const, text: msg, ts: Date.now() }];
+            msgsRef.current = next;
+            return next;
+          });
+          return;
+        }
+
+        if (!dres.ok) {
+          const msg = dres.error || "Dispatch failed.";
+          onDispatchComplete?.({ ok: false, error: msg });
+          setMsgs((m) => {
+            const next = [...m, { role: "assistant" as const, text: msg, ts: Date.now() }];
+            msgsRef.current = next;
+            return next;
+          });
+          return;
+        }
+
+        onDispatchComplete?.({ ok: true });
+        const assistantText = formatDispatchAssistantMessage(dres);
+        setMsgs((m) => {
+          const next = [...m, { role: "assistant" as const, text: assistantText, ts: Date.now() }];
+          msgsRef.current = next;
+          return next;
+        });
+        speak(toSpeakableLine(assistantText, 3));
+        return;
+      }
+
+      if (typeof window.exec.publishVmaxResponse === "function") {
+        void window.exec.publishVmaxResponse({ phase: "loading", question: q });
+      }
+
       const res = await window.exec.ask({
         question: q,
         screenshotBase64,
         history: historyForAsk,
+        ...(summaryTrim ? { repoContextSummary: summaryTrim } : {}),
       });
       const { prose } = parseAskActionTag(res.text);
       const assistantText = prose || res.text;
@@ -151,7 +227,9 @@ export default function OverlayMiniChat({
       }
       speak(deriveSpeakable(res.structured.speakableSummary, res.text));
     } catch (err) {
-      const msg = `Ask failed: ${(err as Error).message}`;
+      const raw = (err as Error)?.message || String(err);
+      const msg = `Request failed: ${raw}`;
+      onDispatchComplete?.({ ok: false, error: raw });
       setMsgs((m) => {
         const next = [...m, { role: "assistant" as const, text: msg, ts: Date.now() }];
         msgsRef.current = next;
@@ -168,13 +246,13 @@ export default function OverlayMiniChat({
   if (!open) return null;
 
   return (
-    <div className="no-drag flex flex-col border-t border-white/[0.08] mt-1 pt-2 px-2 pb-2 gap-2 min-h-0">
-      <div className="flex items-center justify-between gap-2 shrink-0">
-        <span className="text-[10.5px] font-semibold uppercase tracking-wide text-white/45">Chat</span>
-        <div className="flex items-center gap-1.5">
+    <div className="no-drag flex flex-col border-t border-white/[0.08] mt-1 pt-2 px-3 pb-2.5 gap-2 min-h-0">
+      <div className="flex flex-col gap-1.5 shrink-0">
+        <span className="text-[10.5px] font-semibold uppercase tracking-wide text-white/45 min-w-0">Chat</span>
+        <div className="flex items-center justify-end gap-3 pr-0.5">
           <button
             type="button"
-            className="text-[10px] text-white/45 hover:text-white/80 px-1.5 py-0.5 rounded"
+            className="text-[10px] text-white/45 hover:text-white/80 px-2 py-1 rounded-md transition-colors"
             onClick={() => {
               setMsgs([]);
               msgsRef.current = [];
@@ -182,9 +260,10 @@ export default function OverlayMiniChat({
           >
             Clear
           </button>
+          <span className="w-px h-3.5 bg-white/10 shrink-0" aria-hidden />
           <button
             type="button"
-            className="text-[10px] text-white/45 hover:text-white/80 px-1.5 py-0.5 rounded"
+            className="text-[10px] text-white/45 hover:text-white/80 px-2 py-1 rounded-md transition-colors"
             onClick={() => onOpenChange(false)}
           >
             Hide
@@ -197,7 +276,10 @@ export default function OverlayMiniChat({
         className="flex-1 min-h-[88px] max-h-[160px] overflow-y-auto rounded-xl border border-white/[0.08] bg-black/25 px-2 py-1.5 space-y-2"
       >
         {msgs.length === 0 ? (
-          <p className="text-[11px] text-white/40 px-1 py-2">Type a question — same AI as voice, with repo context if you’ve opened a project before.</p>
+          <p className="text-[11px] text-white/40 px-1 py-2 leading-relaxed">
+            Type a task or question — Send uses the same agent split and routing as the microphone. If you’ve picked a repo in Command Center, we attach a fresh snapshot when
+            this chat opens. Older builds without pill dispatch fall back to Ask-only.
+          </p>
         ) : (
           msgs.map((m, i) => (
             <div
@@ -211,7 +293,9 @@ export default function OverlayMiniChat({
           ))
         )}
         {pending ? (
-          <div className="text-[10px] text-white/45 animate-pulse px-2">Thinking…</div>
+          <div className="text-[10px] text-white/45 animate-pulse px-2">
+            {typeof window.exec.dispatch === "function" ? "Routing…" : "Thinking…"}
+          </div>
         ) : null}
       </div>
 

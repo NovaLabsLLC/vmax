@@ -4,6 +4,7 @@ import OverlayMiniChat from "./components/OverlayMiniChat";
 import VmaxExpandedPanel from "./components/VmaxExpandedPanel";
 import { useVoiceCapture } from "./hooks/useVoiceCapture";
 import { useScreen } from "./hooks/useScreen";
+import { formatRepoContextSummary } from "./utils/repoContextSummary";
 import { subscribeSettingsUpdated } from "./utils/subscribeSettingsUpdated";
 import { splitAgentsForPrompt } from "./utils/splitAgents";
 import type { AgentStatusEvent, VmaxOverlayBroadcast, VmaxPanelPayload } from "./types";
@@ -44,6 +45,7 @@ export default function OverlayApp() {
   const [speaking, setSpeaking] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatPending, setChatPending] = useState(false);
+  const [overlayRepoSummary, setOverlayRepoSummary] = useState("");
 
   const [vmaxUi, setVmaxUi] = useState<{
     phase: "idle" | "loading" | "ready" | "error";
@@ -105,6 +107,28 @@ export default function OverlayApp() {
       if (typeof sett.talkBack === "boolean") setTalkBack(sett.talkBack);
     });
   }, []);
+
+  useEffect(() => {
+    if (!chatOpen) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const p = await window.exec.getLastRepo();
+        if (!p || cancelled) {
+          if (!cancelled) setOverlayRepoSummary("");
+          return;
+        }
+        const ctx = await window.exec.scanRepo(p);
+        if (cancelled) return;
+        setOverlayRepoSummary(formatRepoContextSummary(ctx));
+      } catch {
+        if (!cancelled) setOverlayRepoSummary("");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [chatOpen]);
 
   useEffect(() => {
     // Start screen capture once the user first opens chat (or invokes
@@ -289,7 +313,7 @@ export default function OverlayApp() {
     if (minimized) {
       void syncOverlayShellBounds(OVERLAY_PUCK_PX, OVERLAY_PUCK_PX, false);
     } else {
-      void syncOverlayShellBounds(400, 56, true);
+      void syncOverlayShellBounds(400, 48, true);
     }
   }, [minimized]);
 
@@ -377,7 +401,7 @@ export default function OverlayApp() {
 
   return (
     <div
-      className={`h-full w-max max-w-[100vw] flex flex-col overflow-x-visible overflow-y-hidden select-none
+      className={`min-h-0 h-full w-max max-w-[100vw] flex flex-col justify-center overflow-x-visible overflow-y-hidden select-none
                   ${busy ? "shimmer-sweep" : ""}`}
     >
       <div
@@ -393,7 +417,7 @@ export default function OverlayApp() {
         }`}
       >
       <div
-        className="shrink-0 flex flex-nowrap w-max box-border items-center gap-3 px-3 py-2 min-h-[56px]"
+        className="shrink-0 flex flex-nowrap w-max box-border items-center gap-3 px-3 py-1 min-h-0"
       >
         <div
           className="drag h-10 pl-1 pr-2 flex items-center cursor-grab active:cursor-grabbing
@@ -515,9 +539,14 @@ export default function OverlayApp() {
         <OverlayMiniChat
           talkBack={talkBack}
           getScreenshot={() => screen.getLatestFrame()}
+          repoContextSummary={overlayRepoSummary.trim() ? overlayRepoSummary : null}
           open={chatOpen}
           onOpenChange={setChatOpen}
           onPendingChange={setChatPending}
+          onDispatchComplete={(r) => {
+            if (r.ok) setDispatchError(null);
+            else if (r.error) setDispatchError(r.error);
+          }}
         />
 
         {dispatchError && !showVmaxBody ? (

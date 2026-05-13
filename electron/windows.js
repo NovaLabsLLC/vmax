@@ -68,7 +68,7 @@ function createCommandWindow({ visible = true } = {}) {
 /** Minimum / default content width; renderer measures the shell and calls `overlay:set-bounds`. */
 const PILL_WIDTH_MIN = 300;
 const PILL_WIDTH_DEFAULT = 400;
-const PILL_HEIGHT = 56;
+const PILL_HEIGHT = 48;
 /** Absolute floor for clamping — renderer shrinks the overlay to this when minimized. */
 const OVERLAY_PUCK_MIN = 80;
 /** Upper bound for overlay height (renderer asks for exact size below this). */
