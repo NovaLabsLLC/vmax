@@ -450,11 +450,10 @@ export default function WorkspacePanel({
         setDiffSummary(s.diffSummary || null);
         setMessages(Array.isArray(s.messages) ? s.messages : []);
         setResultKind(s.plan ? "plan" : s.failure ? "failure" : s.diffSummary ? "diff" : "idle");
-        if (s.repoPath) {
-          await activateWithRepo(s.repoPath);
+        if (s.repoPath && String(s.repoPath).trim()) {
+          await activateWithRepo(String(s.repoPath).trim());
         } else {
-          const last = await window.exec.getLastRepo();
-          if (!cancelled && last) await activateWithRepo(last);
+          deactivateRepo();
         }
         return;
       }
@@ -596,6 +595,13 @@ export default function WorkspacePanel({
       say(ctx.error, "warn");
     }
   }
+
+  function deactivateRepo() {
+    setActive(false);
+    setRepoPath(null);
+    setRepo(null);
+  }
+
   async function rescan() {
     if (!repoPath) return;
     const ctx = await window.exec.scanRepo(repoPath);
@@ -617,6 +623,14 @@ export default function WorkspacePanel({
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- epoch bump only; active read via ref
   }, [savedRepoEpoch]);
+
+  const workspaceLinearRepoSync = useMemo(
+    () => ({
+      repoPath,
+      repoName: repo?.ok === true ? repo.name : null,
+    }),
+    [repoPath, repo],
+  );
 
   function isAffirmative(s: string) {
     return /^(yes|yeah|yep|yup|sure|ok(?:ay)?|go ahead|do it|please do|create it|sounds good|let'?s do it|confirmed?|that works|yes please)\b/i.test(s.trim());
@@ -1221,6 +1235,7 @@ export default function WorkspacePanel({
         }}
         voiceDraftFromPill={pendingLinearDraft}
         onConsumeVoiceDraftFromPill={onConsumeLinearDraft}
+        workspaceRepoSync={workspaceLinearRepoSync}
       />
       {resolvedLinearIssueId ? (
         <div

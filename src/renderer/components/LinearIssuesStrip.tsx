@@ -31,9 +31,58 @@ type Props = {
   /** Overlay mic/chat → Command Center opens Add task + drafts via `/issue-draft-from-transcript`. */
   voiceDraftFromPill?: { text: string; epoch: number } | null;
   onConsumeVoiceDraftFromPill?: () => void;
+  /**
+   * When the active workspace chat has no linked repo (`repoPath`), auto-select Linear "All workspaces".
+   * Otherwise pick the chip whose name best matches scanned repo name or folder basename.
+   */
+  workspaceRepoSync?: { repoPath: string | null; repoName: string | null } | null;
 };
 
 type WsBucket = { key: string; label: string; count: number };
+
+function repoBasenameForMatch(full: string): string {
+  const s = full.replace(/[/\\]+$/, "");
+  const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+  return ((i >= 0 ? s.slice(i + 1) : s) || "").trim();
+}
+
+function slugifyMatch(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** Align My Tasks workspace chips with local git workspace (Discord rail / repo strip). */
+function linearWorkspaceKeyFromRepoHint(
+  repoName: string | null | undefined,
+  repoPath: string | null | undefined,
+  buckets: WsBucket[],
+): "all" | string {
+  if (buckets.length === 0) return "all";
+  const slug = slugifyMatch((repoName || "").trim() || repoBasenameForMatch(repoPath || ""));
+  if (!slug) return "all";
+
+  if (buckets.length === 1) {
+    const b = buckets[0];
+    const bs = slugifyMatch(b.label);
+    if (!bs) return "all";
+    return bs === slug || bs.includes(slug) || slug.includes(bs) ? b.key : "all";
+  }
+
+  let bestKey: string | null = null;
+  let bestScore = 0;
+  for (const b of buckets) {
+    const bs = slugifyMatch(b.label);
+    if (!bs) continue;
+    let score = 0;
+    if (bs === slug) score = 3;
+    else if (slug.startsWith(bs) || bs.startsWith(slug)) score = 2;
+    else if (slug.includes(bs) || bs.includes(slug)) score = 1;
+    if (score > bestScore) {
+      bestScore = score;
+      bestKey = b.key;
+    }
+  }
+  return bestScore > 0 && bestKey ? bestKey : "all";
+}
 
 const EXPAND_LS_KEY = "linear-issues-strip-expanded";
 
@@ -76,6 +125,7 @@ export default function LinearIssuesStrip({
   onBriefReadySendToCursor,
   voiceDraftFromPill,
   onConsumeVoiceDraftFromPill,
+  workspaceRepoSync,
 }: Props) {
   const [rows, setRows] = useState<LinearIssueRow[]>([]);
   const [meta, setMeta] = useState<FetchLinearIssuesResult["workspaces"]>([]);
@@ -129,6 +179,11 @@ export default function LinearIssuesStrip({
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const editTitleInputRef = useRef<HTMLInputElement | null>(null);
+  const editTargetRef = useRef<LinearIssueRow | null>(null);
+  const editDescVoice = useVoiceCapture();
+  const [editDescTranscribeBusy, setEditDescTranscribeBusy] = useState(false);
+  const cancelEditDescVoiceRef = useRef(editDescVoice.cancel);
+  cancelEditDescVoiceRef.current = editDescVoice.cancel;
 
   const closeCreateModal = useCallback(() => {
     if (createBusy) return;
@@ -136,10 +191,11 @@ export default function LinearIssuesStrip({
   }, [createBusy]);
 
   const closeEditModal = useCallback(() => {
-    if (editBusy) return;
+    if (editBusy || editDescTranscribeBusy) return;
+    cancelEditDescVoiceRef.current();
     setEditTarget(null);
     setEditError(null);
-  }, [editBusy]);
+  }, [editBusy, editDescTranscribeBusy]);
 
   const toggleExpanded = useCallback(() => {
     setExpanded((prev) => {
@@ -229,11 +285,18 @@ export default function LinearIssuesStrip({
     setEditTarget(row);
   }, []);
 
+  useEffect(() => {
+    editTargetRef.current = editTarget;
+  }, [editTarget]);
+
   const submitEditIssue = useCallback(async () => {
     const row = editTarget;
     const identRaw = `${row?.identifier ?? ""}`.trim();
     if (!row || !identRaw || identRaw === "?") {
       say("This issue can't be edited (missing Linear identifier).", "warn");
+      return;
+    }
+    if (editDescVoice.state !== "idle" || editDescTranscribeBusy) {
       return;
     }
     const title = editTitle.trim();
@@ -266,7 +329,35 @@ export default function LinearIssuesStrip({
     } finally {
       setEditBusy(false);
     }
-  }, [editDesc, editDue, editTarget, editTitle, loadAll, say]);
+  }, [editDesc, editDescTranscribeBusy, editDescVoice.state, editDue, editTarget, editTitle, loadAll, say]);
+
+  async function transcribeIntoEditDescription() {
+    if (editBusy || editDescVoice.state !== "idle" || editDescTranscribeBusy) return;
+    setEditError(null);
+    try {
+      const result = await editDescVoice.start({ silenceMs: 1200, maxMs: 20000, threshold: 0.028 });
+      if (!result) return;
+      setEditDescTranscribeBusy(true);
+      const { text } = await window.exec.transcribe(result);
+      if (!editTargetRef.current) return;
+      const raw = (text || "").trim();
+      if (!raw) {
+        say("Didn't catch that — try again.", "warn");
+        return;
+      }
+      setEditDesc((prev) => {
+        const p = prev.trim();
+        return p ? `${p}\n\n${raw}` : raw;
+      });
+      say("Added transcription to the description.", "success");
+    } catch (err) {
+      const msg = String((err as Error)?.message || err);
+      setEditError(msg);
+      say(msg, "warn");
+    } finally {
+      setEditDescTranscribeBusy(false);
+    }
+  }
 
   useEffect(() => {
     void loadAll();
@@ -415,6 +506,17 @@ export default function LinearIssuesStrip({
     if (workspaceFilter === "all") return rows;
     return rows.filter((r) => String(r._workspace_id || "") === workspaceFilter);
   }, [rows, workspaceFilter]);
+
+  useEffect(() => {
+    if (workspaceRepoSync === undefined) return;
+    const pathTrim = workspaceRepoSync.repoPath?.trim() ?? "";
+    const nameTrim = (workspaceRepoSync.repoName ?? "").trim();
+    const next =
+      !pathTrim && !nameTrim
+        ? "all"
+        : linearWorkspaceKeyFromRepoHint(workspaceRepoSync.repoName, workspaceRepoSync.repoPath, filterBuckets);
+    setWorkspaceFilter(next);
+  }, [workspaceRepoSync, workspaceRepoSync?.repoPath, workspaceRepoSync?.repoName, filterBuckets]);
 
   const submitCreate = useCallback(async () => {
     const title = createTitle.trim();
@@ -750,8 +852,10 @@ export default function LinearIssuesStrip({
         <button
           type="button"
           aria-label="Close edit dialog backdrop"
-          disabled={editBusy}
-          className={`absolute inset-0 bg-black/[0.55] backdrop-blur-[2px] ${editBusy ? "cursor-default" : "cursor-pointer"}`}
+          disabled={editBusy || editDescTranscribeBusy}
+          className={`absolute inset-0 bg-black/[0.55] backdrop-blur-[2px] ${
+            editBusy || editDescTranscribeBusy ? "cursor-default" : "cursor-pointer"
+          }`}
           onClick={() => closeEditModal()}
         />
         <div
@@ -776,7 +880,7 @@ export default function LinearIssuesStrip({
             </div>
             <button
               type="button"
-              disabled={editBusy}
+              disabled={editBusy || editDescTranscribeBusy}
               aria-label="Close dialog"
               onClick={() => closeEditModal()}
               className="shrink-0 rounded-lg border border-white/[0.12] bg-white/[0.06] hover:bg-white/[0.11]
@@ -807,15 +911,62 @@ export default function LinearIssuesStrip({
             />
           </label>
           <label className="block space-y-1">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
-              Description{" "}
-              <span className="font-normal text-white/32">optional</span>
+            <span className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-white/40">
+                Description{" "}
+                <span className="font-normal text-white/32">optional</span>
+              </span>
+              <span className="flex items-center gap-1.5 shrink-0">
+                {editDescVoice.state !== "idle" ? (
+                  <button
+                    type="button"
+                    disabled={editBusy || editDescTranscribeBusy}
+                    aria-label="Cancel transcription"
+                    title="Stop listening"
+                    onClick={() => cancelEditDescVoiceRef.current()}
+                    className="text-[10px] px-2 h-[24px] rounded-md bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.1] text-white/68
+                               disabled:opacity-35 disabled:pointer-events-none"
+                  >
+                    Cancel
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={
+                    editBusy ||
+                    editDescVoice.state !== "idle" ||
+                    editDescTranscribeBusy
+                  }
+                  title="Speak · recording stops after a brief pause"
+                  aria-label="Transcribe speech into description"
+                  onClick={() => void transcribeIntoEditDescription()}
+                  className="inline-flex items-center gap-1 text-[10px] px-2 h-[24px] rounded-md bg-cyan-500/18 hover:bg-cyan-500/26 border border-cyan-400/28 text-cyan-100/95
+                             disabled:opacity-40 disabled:pointer-events-none"
+                >
+                  <MicGlyph className="size-3 opacity-95" />
+                  {editDescTranscribeBusy
+                    ? "Transcribing…"
+                    : editDescVoice.state === "listening" || editDescVoice.state === "finalizing"
+                      ? "Listening…"
+                      : "Transcribe"}
+                </button>
+              </span>
             </span>
             <textarea
               value={editDesc}
               onChange={(e) => setEditDesc(e.target.value)}
-              placeholder="Markdown or plain text"
-              disabled={editBusy}
+              placeholder={
+                editDescTranscribeBusy
+                  ? "Transcribing…"
+                  : editDescVoice.state !== "idle"
+                    ? "Listening…"
+                    : "Markdown or plain text"
+              }
+              disabled={
+                editBusy ||
+                editDescVoice.state !== "idle" ||
+                editDescTranscribeBusy
+              }
               rows={4}
               className="w-full resize-y min-h-[4rem] text-[11.5px] rounded-md bg-white/[0.06] border border-white/[0.12] px-2 py-1.5 text-white placeholder:text-white/35 mono"
             />
@@ -839,7 +990,11 @@ export default function LinearIssuesStrip({
           <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-white/[0.06]">
             <button
               type="button"
-              disabled={editBusy || !editTitle.trim()}
+              disabled={
+                editBusy ||
+                editDescTranscribeBusy ||
+                !editTitle.trim()
+              }
               onClick={() => void submitEditIssue()}
               className="text-[11px] px-3 h-[28px] rounded-md bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/35 text-emerald-100 disabled:opacity-45 disabled:pointer-events-none"
             >
@@ -847,7 +1002,7 @@ export default function LinearIssuesStrip({
             </button>
             <button
               type="button"
-              disabled={editBusy}
+              disabled={editBusy || editDescTranscribeBusy}
               onClick={() => closeEditModal()}
               className="text-[11px] px-3 h-[28px] rounded-md bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.1] text-white/75 disabled:opacity-35"
             >
