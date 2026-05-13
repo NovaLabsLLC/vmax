@@ -3,7 +3,7 @@ import type { AgentRunState, ExecAgent } from "../types";
 
 type CliRow = { installed: boolean; authed?: boolean; version?: string; authVia?: string };
 
-export type AgentsCliPayload = { claude: CliRow; codex: CliRow };
+export type AgentsCliPayload = { claude: CliRow; codex: CliRow; cursor?: { installed?: boolean } };
 
 function isMacPlatform() {
   if (typeof navigator === "undefined") return false;
@@ -19,7 +19,7 @@ export type AgentsConnectionGraphProps = {
 
 /**
  * SVG hub-and-spokes: hub always connects to Claude / Codex / Cursor (three fixed anchors).
- * `ok` dims spokes and rings until that bridge reports installed+authed (Cursor: mac host).
+ * `ok` dims spokes and rings until that bridge reports ready (Claude/Codex: CLI+auth; Cursor: macOS + Cursor.app).
  * `live[*] === "running"` thickens edges and pulses the peripheral ring + “running…”.
  */
 export default function AgentsConnectionGraph({
@@ -46,8 +46,13 @@ export default function AgentsConnectionGraph({
     {
       id: "cursor" as const,
       label: "Cursor",
-      detail: "Editor bridge",
-      ok: mac,
+      detail:
+        !mac
+          ? "macOS only"
+          : cli?.cursor?.installed
+            ? "Editor bridge"
+            : "Install Cursor.app",
+      ok: !!(mac && cli?.cursor?.installed),
     },
   ];
   /** Always lay out hub + three satellites so topology stays clear; `ok` only affects prominence. */

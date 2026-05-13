@@ -10,10 +10,13 @@ const fs = require("fs");
 const os = require("os");
 const { spawn } = require("child_process");
 const { ipcMain } = require("electron");
+const { augmentCliPathEnv } = require("../utils.js");
 
 function execText(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { ...opts, shell: false });
+    const mergedEnv = opts.env !== undefined ? opts.env : augmentCliPathEnv(process.env);
+    const { env: _e, shell: _s, ...rest } = opts;
+    const child = spawn(cmd, args, { ...rest, shell: false, env: mergedEnv });
     let out = "";
     let err = "";
     child.stdout?.on("data", (d) => (out += d.toString()));
@@ -67,6 +70,17 @@ function detectCodexAuth() {
   return { authed: false };
 }
 
+/** True when Cursor IDE is present (macOS). Used for hub graph + expectations. */
+function detectCursorApp() {
+  if (process.platform !== "darwin") return { installed: false };
+  const home = os.homedir();
+  return {
+    installed:
+      fs.existsSync("/Applications/Cursor.app") ||
+      fs.existsSync(path.join(home, "Applications/Cursor.app")),
+  };
+}
+
 function register() {
   ipcMain.handle("cli:status", async () => {
     const claudeBin = process.env.CLAUDE_BIN || "claude";
@@ -85,7 +99,7 @@ function register() {
       codex.authed = a.authed;
       codex.authVia = a.via;
     }
-    return { claude, codex };
+    return { claude, codex, cursor: detectCursorApp() };
   });
 
   ipcMain.handle("cli:open-login", async (_evt, { tool } = {}) => {

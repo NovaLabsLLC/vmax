@@ -11,8 +11,13 @@ const fs = require("fs");
 const { spawn } = require("child_process");
 const { ipcMain } = require("electron");
 const { getCommandBlockReason, EXIT_POLICY_BLOCK } = require("../../utils/commandSafety.js");
+const { augmentCliPathEnv } = require("../utils.js");
 
 const runners = new Map();
+
+function childCliEnv() {
+  return { ...augmentCliPathEnv(process.env), FORCE_COLOR: "0" };
+}
 
 function friendlyCodexError(err) {
   const code = err && err.code;
@@ -62,7 +67,7 @@ function register() {
     const child = spawn(command, {
       cwd: repoPath,
       shell: true,
-      env: { ...process.env, FORCE_COLOR: "0" },
+      env: childCliEnv(),
     });
     runners.set(runId, child);
     const send = (channel, payload) => {
@@ -95,7 +100,7 @@ function register() {
 
     const child = spawn(exe, args, {
       cwd: repoPath,
-      env: { ...process.env, FORCE_COLOR: "0" },
+      env: childCliEnv(),
       shell: false,
       // Close stdin so non-interactive agents see EOF immediately instead of
       // blocking on "Reading additional input from stdin…".
@@ -136,7 +141,7 @@ function register() {
     return await new Promise((resolve) => {
       const child = spawn(exe, ["-p", p], {
         cwd,
-        env: { ...process.env, FORCE_COLOR: "0" },
+        env: childCliEnv(),
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -202,7 +207,7 @@ function register() {
       const args = subcmd ? [subcmd, p] : [p];
       const child = spawn(exe, args, {
         cwd,
-        env: { ...process.env, FORCE_COLOR: "0" },
+        env: childCliEnv(),
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       });

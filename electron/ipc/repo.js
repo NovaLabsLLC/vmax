@@ -3,11 +3,11 @@
 
 const path = require("path");
 const fs = require("fs");
-const { spawn } = require("child_process");
 const { ipcMain, BrowserWindow, dialog, clipboard, shell } = require("electron");
 const { readState, writeState } = require("../state.js");
 const { getCommandWindow } = require("../windows.js");
 const { scanRepo } = require("../../utils/repoContext.js");
+const { openRepoInCursor } = require("../openCursorWorkspace.js");
 
 function register() {
   ipcMain.handle("exec:get-last-repo", () => {
@@ -41,20 +41,21 @@ function register() {
 
   ipcMain.handle("exec:scan-repo", (_evt, repoPath) => scanRepo(repoPath));
 
-  // Try, in order: `cursor` CLI → `open -a Cursor` → cursor:// URL → Finder.
+  // Try, in order: `cursor` CLI (common PATH + bundled) → `open -a Cursor` → cursor:// URL → Finder.
   ipcMain.handle("exec:open-in-cursor", async (_evt, repoPath) => {
-    const trySpawn = (cmd, args) => new Promise((resolve) => {
-      const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
-      child.on("error", () => resolve(false));
-      child.on("spawn", () => { child.unref(); resolve(true); });
-    });
-    if (await trySpawn("cursor", [repoPath])) return { ok: true, via: "cli" };
-    if (process.platform === "darwin" && await trySpawn("open", ["-a", "Cursor", repoPath]))
-      return { ok: true, via: "open-a" };
+    const { openedVia } = await openRepoInCursor(repoPath);
+    if (openedVia === "cursor-cli" || openedVia === "cursor-path" || openedVia === "cursor-bundled") {
+      return { ok: true, via: "cli" };
+    }
+    if (openedVia === "open-app") return { ok: true, via: "open-a" };
     try {
-      await shell.openExternal("cursor://file" + (repoPath.startsWith("/") ? repoPath : "/" + repoPath));
+      await shell.openExternal(
+        "cursor://file" + (String(repoPath).startsWith("/") ? repoPath : "/" + repoPath),
+      );
       return { ok: true, via: "url" };
-    } catch {}
+    } catch {
+      /* ignore */
+    }
     shell.openPath(repoPath);
     return { ok: false, via: "finder" };
   });

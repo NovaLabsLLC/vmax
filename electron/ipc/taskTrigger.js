@@ -19,11 +19,12 @@ const { ipcMain, app, systemPreferences, clipboard } = require("electron");
 
 const usageStats = require("../utils/usageStats.js");
 const { readState } = require("../state.js");
-const { sleep } = require("../utils.js");
-const { runApplescriptFile, cursorPasteApplescript } = require("../applescript.js");
+const { sleep, augmentCliPathEnv } = require("../utils.js");
+const { tryCursorComposerPasteAttempts } = require("../applescript.js");
 const { sendToCommandCenter, sendToOverlay, broadcastRunData, broadcastRunEnd } = require("../ipcBus.js");
 const { runners, friendlyClaudeError, friendlyCodexError } = require("./runners.js");
 const { CURSOR_CLIPBOARD_SAFETY_FOOTER } = require("../../utils/commandSafety.js");
+const { openRepoInCursor } = require("../openCursorWorkspace.js");
 const { routeAgent } = require("./dispatch.js");
 const { VmaxTaskSchema } = require("../../utils/taskSchema.js");
 
@@ -156,6 +157,10 @@ function buildPromptPayload(task, extras) {
   return lines.join("\n");
 }
 
+function taskAgentEnv() {
+  return { ...augmentCliPathEnv(process.env), FORCE_COLOR: "0" };
+}
+
 function snapshot(rec) {
   if (!rec) return null;
   return {
@@ -197,7 +202,7 @@ function spawnClaude({ rec, repoPath, prompt }) {
   const exe = process.env.CLAUDE_BIN || "claude";
   const child = spawn(exe, ["-p", prompt.slice(0, 200_000)], {
     cwd: repoPath,
-    env: { ...process.env, FORCE_COLOR: "0" },
+    env: taskAgentEnv(),
     shell: false,
   });
   const { runId } = rec;
@@ -243,7 +248,7 @@ function spawnCodex({ rec, repoPath, prompt }) {
   const args = subcmd ? [subcmd, prompt.slice(0, 200_000)] : [prompt.slice(0, 200_000)];
   const child = spawn(exe, args, {
     cwd: repoPath,
-    env: { ...process.env, FORCE_COLOR: "0" },
+    env: taskAgentEnv(),
     shell: false,
   });
   const { runId } = rec;
@@ -297,16 +302,11 @@ async function triggerCursor({ rec, repoPath, prompt }) {
     clipboard.writeText(prompt + CURSOR_CLIPBOARD_SAFETY_FOOTER);
     setStatus(rec, "running");
     await sleep(220);
-    await new Promise((resolve) => {
-      const c = spawn("open", ["-a", "Cursor", repoPath], { detached: true, stdio: "ignore" });
-      c.on("error", () => resolve());
-      c.on("spawn", () => { c.unref(); resolve(); });
-    });
-    await sleep(750);
-    let r = await runApplescriptFile(cursorPasteApplescript("i"));
-    if (r.code !== 0) r = await runApplescriptFile(cursorPasteApplescript("l"));
-    if (r.code === 0) setStatus(rec, "completed", { code: 0 });
-    else setStatus(rec, "failed", { error: r.stderr || "Cursor automation failed; prompt is on the clipboard" });
+    const { openedVia } = await openRepoInCursor(repoPath);
+    await sleep(openedVia === "none" ? 450 : 800);
+    const auto = await tryCursorComposerPasteAttempts();
+    if (auto) setStatus(rec, "completed", { code: 0 });
+    else setStatus(rec, "failed", { error: "Cursor automation failed; prompt is on the clipboard" });
   } catch (err) {
     setStatus(rec, "failed", { error: String((err && err.message) || err) });
   }

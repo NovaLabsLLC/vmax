@@ -33,21 +33,34 @@ function runApplescriptFile(source) {
 function cursorPasteApplescript(openKey) {
   return `
 tell application "Cursor" to activate
-delay 2.0
+delay 2.3
 tell application "System Events"
   tell process "Cursor"
     set frontmost to true
   end tell
-  delay 0.35
+  delay 0.4
   key code 53
-  delay 0.25
+  delay 0.28
   keystroke "${openKey}" using {command down}
-  delay 1.05
+  delay 1.25
   keystroke "v" using {command down}
-  delay 0.45
+  delay 0.5
   key code 36
 end tell
 `;
 }
 
-module.exports = { runApplescriptFile, cursorPasteApplescript };
+async function tryCursorComposerPasteAttempts() {
+  const keys = /** @type {("i"|"l"|"k")[]} */ (["i", "l", "k"]);
+  const labels = { i: "⌘I", l: "⌘L", k: "⌘K" };
+  for (let idx = 0; idx < keys.length; idx++) {
+    const key = keys[idx];
+    const r = await runApplescriptFile(cursorPasteApplescript(key));
+    if (r.code === 0) {
+      return { ok: true, pasteShortcut: labels[key], shortcutIndex: idx };
+    }
+  }
+  return null;
+}
+
+module.exports = { runApplescriptFile, cursorPasteApplescript, tryCursorComposerPasteAttempts };

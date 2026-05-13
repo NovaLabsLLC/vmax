@@ -3,18 +3,17 @@
 // Best-effort, macOS-only. Requires Accessibility permission on Electron.
 // Strategy:
 //   1. Put prompt (+ safety footer) on the clipboard.
-//   2. Open the repo in Cursor (CLI first, falls back to `open -a Cursor`).
-//   3. AppleScript: activate Cursor → ⌘I (Composer/Agent) → ⌘V → return.
-//   4. If ⌘I fails, try ⌘L (Chat).
-//   5. On total failure, the clipboard still has the prompt — surface a
+//   2. Open the repo in Cursor (bundled CLI, PATH `cursor`, or `open -a Cursor`).
+//   3. AppleScript: activate Cursor → ⌘I → ⌘V → enter; fallback ⌘L, then ⌘K.
+//   4. On total failure, the clipboard still has the prompt — surface a
 //      message telling the user to paste manually.
 
-const { spawn } = require("child_process");
 const { ipcMain, clipboard, systemPreferences, shell, app } = require("electron");
 const usageStats = require("../utils/usageStats.js");
 const { sleep } = require("../utils.js");
-const { runApplescriptFile, cursorPasteApplescript } = require("../applescript.js");
+const { tryCursorComposerPasteAttempts } = require("../applescript.js");
 const { CURSOR_CLIPBOARD_SAFETY_FOOTER } = require("../../utils/commandSafety.js");
+const { openRepoInCursor } = require("../openCursorWorkspace.js");
 
 function register() {
   ipcMain.handle("exec:send-to-cursor-chat", async (_evt, { repoPath, prompt }) => {
@@ -27,67 +26,51 @@ function register() {
       systemPreferences.isTrustedAccessibilityClient(true);
       usageStats.record(app, "cursor_handoff", { agent: "cursor", ok: false });
       return {
-        ok: false, reason: "accessibility",
-        message: "Grant Accessibility permission to Electron, then quit and run again.",
+        ok: false,
+        reason: "accessibility",
+        message:
+          "Grant Accessibility permission to Vmax (Electron) in System Settings → Privacy → Accessibility, quit and reopen the app.",
       };
     }
 
     clipboard.writeText(String(prompt ?? "") + CURSOR_CLIPBOARD_SAFETY_FOOTER);
     await sleep(280);
 
-    let openedRepoVia = "none";
-    await new Promise((resolve) => {
-      const tryRun = (cmd, args) => new Promise((res) => {
-        const c = spawn(cmd, args, { detached: true, stdio: "ignore" });
-        c.on("error", () => res(false));
-        c.on("spawn", () => { c.unref(); res(true); });
-      });
-      (async () => {
-        if (await tryRun("cursor", [repoPath])) {
-          openedRepoVia = "cursor-cli";
-          return resolve();
-        }
-        if (await tryRun("open", ["-a", "Cursor", repoPath])) {
-          openedRepoVia = "open-app";
-          return resolve();
-        }
-        resolve();
-      })();
-    });
+    const { openedVia } = await openRepoInCursor(repoPath);
+    await sleep(openedVia === "none" ? 450 : 800);
 
-    await sleep(openedRepoVia === "none" ? 400 : 750);
-
-    const base = { openedRepoVia };
-    let first = await runApplescriptFile(cursorPasteApplescript("i"));
-    if (first.code !== 0) {
-      const second = await runApplescriptFile(cursorPasteApplescript("l"));
-      if (second.code === 0) {
-        usageStats.record(app, "cursor_handoff", { agent: "cursor", ok: true });
-        return { ok: true, pastedVia: "applescript", pasteShortcut: "⌘L", ...base };
-      }
-      first = second;
-    } else {
+    const base = { openedRepoVia: openedVia };
+    const pasted = await tryCursorComposerPasteAttempts();
+    if (pasted) {
       usageStats.record(app, "cursor_handoff", { agent: "cursor", ok: true });
-      return { ok: true, pastedVia: "applescript", pasteShortcut: "⌘I", ...base };
+      return {
+        ok: true,
+        ...base,
+        pastedVia: "applescript",
+        pasteShortcut: pasted.pasteShortcut,
+      };
     }
 
     let urlOk = false;
     try {
-      const pathPart = repoPath.startsWith("/") ? repoPath : `/${repoPath}`;
+      const pathPart =
+        `${repoPath}`.startsWith("/") ? `${repoPath}` : `/${repoPath}`;
       await shell.openExternal("cursor://file" + pathPart);
       urlOk = true;
     } catch {
       /* ignore */
     }
+    const stderrNote =
+      "(If macOS prompted to allow Cursor control, approve System Settings → Privacy → Automation.)";
     const out = {
       ok: true,
       pastedVia: "clipboard-only",
       automationFailed: true,
-      pasteShortcut: "⌘I+⌘L",
+      pasteShortcut: "⌘I / ⌘L / ⌘K",
       ...base,
       message: urlOk
-        ? "Tried ⌘I and ⌘L automation; clipboard is ready — focus Cursor and press ⌘V in Agent or Chat."
-        : first.stderr || "AppleScript failed for ⌘I and ⌘L — prompt is on the clipboard.",
+        ? `Tried Composer/Chat shortcuts (${stderrNote}); prompt is ready — paste with ⌘V in Cursor.`
+        : `Shortcuts failed; prompt copied. ${stderrNote}`,
     };
     usageStats.record(app, "cursor_handoff", { agent: "cursor", ok: out.ok === true });
     return out;

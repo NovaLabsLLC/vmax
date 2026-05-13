@@ -662,9 +662,15 @@ export default function WorkspacePanel({
       return r.message || `Cursor handoff failed${r.reason ? ` (${r.reason})` : ""}. Prompt is on your clipboard.`;
     }
     const bits: string[] = [];
-    if (r.openedRepoVia === "cursor-cli") bits.push("Opened the repo with the Cursor CLI");
-    else if (r.openedRepoVia === "open-app") bits.push("Opened Cursor via macOS open");
-    else bits.push("Could not launch Cursor automatically from here");
+    if (r.openedRepoVia === "cursor-cli" || r.openedRepoVia === "cursor-path") {
+      bits.push("Opened the repo with the Cursor CLI");
+    } else if (r.openedRepoVia === "cursor-bundled") {
+      bits.push("Opened the repo with Cursor’s bundled CLI helper");
+    } else if (r.openedRepoVia === "open-app") {
+      bits.push("Opened Cursor via macOS open");
+    } else {
+      bits.push("Could not launch Cursor automatically from here");
+    }
     if (r.pastedVia === "applescript") {
       bits.push(r.pasteShortcut ? `pasted using ${r.pasteShortcut}` : "pasted using keyboard automation");
     } else {

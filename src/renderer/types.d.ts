@@ -269,7 +269,12 @@ declare global {
         ok: boolean;
         reason?: string;
         message?: string;
-        openedRepoVia?: "cursor-cli" | "open-app" | "none";
+        openedRepoVia?:
+          | "cursor-cli"
+          | "cursor-path"
+          | "cursor-bundled"
+          | "open-app"
+          | "none";
         pastedVia?: "applescript" | "clipboard-only";
         automationFailed?: boolean;
         pasteShortcut?: string;
@@ -278,6 +283,7 @@ declare global {
       cliStatus: () => Promise<{
         claude: { installed: boolean; version?: string; authed?: boolean; authVia?: "env" | "file" };
         codex: { installed: boolean; version?: string; authed?: boolean; authVia?: "env" | "file" };
+        cursor: { installed: boolean };
       }>;
       cliOpenLogin: (tool: "claude" | "codex") => Promise<{ ok: boolean; error?: string }>;
       cliOpenInstall: (tool: "claude" | "codex") => Promise<{ ok: boolean; error?: string }>;

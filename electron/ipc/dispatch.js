@@ -16,13 +16,13 @@ const { spawn } = require("child_process");
 const { ipcMain, clipboard, systemPreferences, app } = require("electron");
 const usageStats = require("../utils/usageStats.js");
 const { readState } = require("../state.js");
-const { sleep } = require("../utils.js");
-const { runApplescriptFile, cursorPasteApplescript } = require("../applescript.js");
+const { sleep, augmentCliPathEnv } = require("../utils.js");
+const { tryCursorComposerPasteAttempts } = require("../applescript.js");
 const { sendToOverlay, sendToCommandCenter, broadcastRunData, broadcastRunEnd } = require("../ipcBus.js");
 const { runners, friendlyClaudeError, friendlyCodexError } = require("./runners.js");
 const { CURSOR_CLIPBOARD_SAFETY_FOOTER } = require("../../utils/commandSafety.js");
 const { routeAgentIntent } = require("../utils/agentIntent.js");
-const { parsePillDualAgentPrompts } = require("../../utils/pillPromptSplit.js");
+const { openRepoInCursor } = require("../openCursorWorkspace.js");
 
 /** @param {string} rawPrompt intent classification for exec:dispatch + structured-task fallback routing */
 function routeAgent(rawPrompt) {
@@ -101,13 +101,15 @@ function startPillAgentDispatch(repoPath, spec) {
   broadcast("running");
   usageStats.record(app, "pill_dispatch", { agent });
 
+  const cliEnv = { ...augmentCliPathEnv(process.env), FORCE_COLOR: "0" };
+
   try {
     if (agent === "claude") {
       const exe = process.env.CLAUDE_BIN || "claude";
       const slice = promptText.slice(0, 200_000);
       const child = spawn(exe, ["-p", slice], {
         cwd: repoPath,
-        env: { ...process.env, FORCE_COLOR: "0" },
+        env: cliEnv,
         shell: false,
         // Non-interactive — close stdin so Claude doesn't wait for EOF.
         stdio: ["ignore", "pipe", "pipe"],
@@ -152,7 +154,7 @@ function startPillAgentDispatch(repoPath, spec) {
       const args = subcmd ? [subcmd, slice] : [slice];
       const child = spawn(exe, args, {
         cwd: repoPath,
-        env: { ...process.env, FORCE_COLOR: "0" },
+        env: cliEnv,
         shell: false,
         // Non-interactive — close stdin so `codex exec` doesn't hang on
         // "Reading additional input from stdin…".
@@ -205,20 +207,15 @@ function startPillAgentDispatch(repoPath, spec) {
           }
           clipboard.writeText(promptText + CURSOR_CLIPBOARD_SAFETY_FOOTER);
           await sleep(220);
-          await new Promise((resolve) => {
-            const c = spawn("open", ["-a", "Cursor", repoPath], { detached: true, stdio: "ignore" });
-            c.on("error", () => resolve());
-            c.on("spawn", () => {
-              c.unref();
-              resolve();
-            });
-          });
-          await sleep(750);
-          let r = await runApplescriptFile(cursorPasteApplescript("i"));
-          if (r.code !== 0) r = await runApplescriptFile(cursorPasteApplescript("l"));
-          if (r.code === 0) broadcast("done");
+          const { openedVia } = await openRepoInCursor(repoPath);
+          await sleep(openedVia === "none" ? 450 : 800);
+          const auto = await tryCursorComposerPasteAttempts();
+          if (auto) broadcast("done");
           else {
-            broadcast("error", { error: r.stderr || "Cursor automation failed; prompt is on the clipboard" });
+            broadcast("error", {
+              error:
+                "Cursor shortcuts failed — prompt copied. Focus Cursor Composer (⌘I) or Chat (⌘L) and press ⌘V.",
+            });
           }
         } catch (err) {
           broadcast("error", { error: String((err && err.message) || err) });
